@@ -1,5 +1,4 @@
 CC = g++
-RM = rm
 
 # OPT_LVL = -O3
 OPT_LVL = -g
@@ -36,6 +35,6 @@ $(BINDIR)/%: $(SRCDIR)/%.cpp
 all: $(BINS)
 
 clean:
-	$(RM) -rf $(OBJDIR) $(BINDIR)
+	rm -rf $(OBJDIR) $(BINDIR)
 
 -include $(DEPS)
