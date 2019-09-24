@@ -1,0 +1,2 @@
+#!/bin/bash
+cat - | sed 's|\s|\t|g' | ansi2html -i -W | sed 's|^.*$|<tr><td>&</td></tr>|' | sed 's|\t|</td><td>|g' | cat <(echo "<table><tbody>") - <(echo "</tbody></table>") | xclip -sel clip -i -t text/html
