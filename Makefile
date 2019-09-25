@@ -18,7 +18,7 @@ OBJS := $(patsubst $(SRCDIR)/%.cpp, $(OBJDIR)/%.o, $(SRCS))
 DEPS := $(patsubst $(SRCDIR)/%.cpp, $(OBJDIR)/%.d, $(SRCS))
 BINS := $(patsubst $(SRCDIR)/%.cpp, $(BINDIR)/%, $(SRCS))
 
-INC = -I./include
+INC = -I./include -I./external/cxxopts/include
 LDFLAGS = -lpthread -lz -lm
 
 $(OBJDIR)/%.o: $(SRCDIR)/%.cpp
@@ -26,13 +26,19 @@ $(OBJDIR)/%.o: $(SRCDIR)/%.cpp
 	$(CC) -MMD $(CCFLAGS) $(INC) -o $@ -c $<
 
 # $(BINDIR)/%: $(OBJS)
+# $(CC) -o $@ $^ $(INC) $(LDFLAGS)
 $(BINDIR)/%: $(SRCDIR)/%.cpp
 	@mkdir -p $(BINDIR)
-	$(CC) -o $@ $^ $(INC) $(LDFLAGS)
+	$(CC) -o $@ $< $(INC) $(LDFLAGS)
 
-.PHONY: clean
+.PHONY: clean external
 
-all: $(BINS)
+default: $(BINS)
+
+all: external default
+
+external:
+	git submodule update --init --recursive
 
 clean:
 	rm -rf $(OBJDIR) $(BINDIR)
