@@ -23,13 +23,13 @@ LDFLAGS = -lpthread -lz -lm
 
 $(OBJDIR)/%.o: $(SRCDIR)/%.cpp
 	@mkdir -p $(OBJDIR)
-	$(CC) -MMD $(CCFLAGS) $(INC) -o $@ -c $<
+	$(CC) -MMD $(CCFLAGS) -o $@ -c $< $(INC)
 
 # $(BINDIR)/%: $(OBJS)
 # $(CC) -o $@ $^ $(INC) $(LDFLAGS)
 $(BINDIR)/%: $(SRCDIR)/%.cpp
 	@mkdir -p $(BINDIR)
-	$(CC) -o $@ $< $(INC) $(LDFLAGS)
+	$(CC) $(CCFLAGS) -o $@ $< $(INC) $(LDFLAGS)
 
 .PHONY: clean external
 
