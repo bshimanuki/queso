@@ -18,8 +18,10 @@ OBJS := $(patsubst $(SRCDIR)/%.cpp, $(OBJDIR)/%.o, $(SRCS))
 DEPS := $(patsubst $(SRCDIR)/%.cpp, $(OBJDIR)/%.d, $(SRCS))
 BINS := $(patsubst $(SRCDIR)/%.cpp, $(BINDIR)/%, $(SRCS))
 
-INC = -I./include -I./external/cxxopts/include
-LDFLAGS = -lpthread -lz -lm
+GTK_INC = $(shell pkg-config --cflags gtk+-3.0)
+GTK_LIB = $(shell pkg-config --libs gtk+-3.0)
+INC = -I./include -I./external/cxxopts/include $(GTK_INC)
+LDFLAGS = -lpthread -lz -lm $(GTK_LIB)
 
 $(OBJDIR)/%.o: $(SRCDIR)/%.cpp
 	@mkdir -p $(OBJDIR)
