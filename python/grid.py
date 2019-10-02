@@ -1,4 +1,5 @@
 from fractions import Fraction
+import warnings
 
 import cv2
 import imageio
@@ -56,7 +57,9 @@ def get_interpolated_peak(im, dis_loc, delta=1, order=2):
 def save_color(fname, im):
 	out = np.array(im)
 	out = np.interp(out, (out.min(), out.max()), (0, 1))
-	out = skimage.img_as_ubyte(out)
+	with warnings.catch_warnings():
+		warnings.simplefilter('ignore') # suppress precision loss warning
+		out = skimage.img_as_ubyte(out)
 	out = cv2.cvtColor(cv2.applyColorMap(out, cv2.COLORMAP_INFERNO), cv2.COLOR_BGR2RGB)
 	imageio.imwrite(fname, out)
 
@@ -80,6 +83,7 @@ def get_cell_size(im):
 	x_mid_slice = get_mountain_slice(g_x, x_mid)
 	g[y_mid_slice] = 0
 	g[:,x_mid_slice] = 0
+	g[:y_mid] = 0 # g has rotational symmetry, so only count it once
 
 	h = np.zeros_like(g)
 
@@ -91,7 +95,7 @@ def get_cell_size(im):
 		if is_far_from_edge(g, dis_loc):
 			cont_loc = get_interpolated_peak(g, dis_loc)
 			peaks.append(cont_loc)
-			print(dis_loc, cont_loc)
+			# print(dis_loc, cont_loc)
 		y_peak_slice = get_mountain_slice(g[:,dis_loc[1]], dis_loc[0])
 		x_peak_slice = get_mountain_slice(g[dis_loc[0]], dis_loc[1])
 		h[y_peak_slice, x_peak_slice] = g[y_peak_slice, x_peak_slice]
@@ -100,52 +104,43 @@ def get_cell_size(im):
 	save_color('test_keep.png', h**3)
 	save_color('test.png', g**3)
 
-	#TODO: offset peak loc by origin
-	# find gcd iteratively
-	# increase gcd threshold each iteration until peak doesn't match
-	peak_y, peak_x = np.stack(peaks).transpose()
-	peak_y = np.sort(peak_y)
-	peak_x = np.sort(peak_x)
+	origin = np.asarray(g.shape) // 2
+	peak_offsets = np.stack(peaks) - origin
+	peak_y, peak_x = peak_offsets.transpose()
+	peak_y = np.abs(peak_y)
+	peak_x = np.abs(peak_x)
+	# print(peak_y)
+	# print(peak_x)
 
-	def condense(peaks):
-		THRESH = 3 # pixels
-		xs = []
-		i = 0
-		last_i = 0
-		while i < peaks.size:
-			if peaks[i] - peaks[last_i] < THRESH:
-				i += 1
-			else:
-				xs.append(np.mean(peaks[last_i:i]))
-				last_i = i
-		xs.append(np.mean(peaks[last_i:i]))
-		xs = np.array(xs)
-		return xs
-	peak_y = condense(peak_y)
-	peak_x = condense(peak_x)
-	print(peak_y)
-	print(peak_x)
+	def get_gcd(xs, init_max_denom=6, init_thresh=1e-1):
+		'Returns gcd of inliers and number of inliers.'
+		max_denom = init_max_denom
+		thresh = init_thresh
+		denom_power_factor = 0.9
+		thresh_scaling_factor = 0.8
 
-	y_diff = np.diff(peak_y)
-	x_diff = np.diff(peak_x)
-	np.set_printoptions(suppress=True)
-	print(y_diff)
-	print(x_diff)
-
-	def get_gcd(xs):
-		#TODO: outliers
-		def is_approx(a, b):
-			THRESH = 1.1
-			return a * THRESH > b and a < b * THRESH
+		def is_approx(a, b, thresh=0.1):
+			return a + thresh > b and a < b + thresh
 		weight = 0
 		val = None
+		n = 0
+
 		for x in xs:
 			if val is None:
 				val = x
 				weight = 1
+				n += 1
 			else:
-				f = Fraction(x / val).limit_denominator(8)
-				if is_approx(float(f) * val, x):
+				if x > val:
+					f = Fraction(x / val).limit_denominator(int(max_denom))
+				else:
+					f = 1 / Fraction(val / x).limit_denominator(int(max_denom))
+				# print(x, val, float(f), x / val, thresh)
+				if is_approx(float(f), x / val, thresh=thresh):
+					n += 1
+					max_denom **= denom_power_factor
+					thresh *= thresh_scaling_factor
+
 					x_weight = f.numerator
 					x_val = x / x_weight
 					weight *= f.denominator
@@ -153,10 +148,17 @@ def get_cell_size(im):
 					total = val * weight + x_val * x_weight
 					weight += x_weight
 					val = total / weight
-		return val
+		return val, n
 
-	y = get_gcd(y_diff)
-	x = get_gcd(x_diff)
+	y, _ = get_gcd(peak_y)
+	x, _ = get_gcd(peak_x)
+
+	# stricter threshholds for matching x and y as same size
+	v, n = get_gcd([y, x], init_max_denom=1, init_thresh=1e-2)
+	if n == 2:
+		y /= round(y / v)
+		x /= round(x / v)
+
 	return y, x
 
 
