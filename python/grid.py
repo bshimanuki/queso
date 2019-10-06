@@ -12,8 +12,6 @@ import skimage
 
 blacker = np.fmin
 whiter = np.fmax
-grid_color_op = blacker
-blank_color_op = whiter
 
 
 def autocorrelate(x):
@@ -97,7 +95,7 @@ def make_normalized_mono(im):
 	bw -= np.mean(bw)
 	return bw
 
-def get_cell_size(im):
+def get_square_size(im):
 	bw = make_normalized_mono(im)
 	ac = autocorrelate(bw)
 	ac_mag = np.abs(ac)
@@ -191,9 +189,9 @@ def get_cell_size(im):
 
 	return y, x
 
-def make_grid(im, cell_size, origin=(0,0), double_size=False, waveform='square', area='center', width=1/4):
+def make_grid(im, square_size, origin=(0,0), double_size=False, waveform='square', area='center', width=1/4):
 	'''Make a grid mask.'''
-	dy, dx = cell_size
+	dy, dx = square_size
 	oy, ox = origin
 	assert waveform in ['sawtooth', 'square']
 	assert area in ['center', 'horizontal', 'vertical', 'QII']
@@ -264,9 +262,9 @@ def make_grid(im, cell_size, origin=(0,0), double_size=False, waveform='square',
 		raise NotImplemented()
 	return grid
 
-def get_offset(im, cell_size):
-	'''Compute the offset in pixels from the center of the image given the cell size.'''
-	grid = make_grid(im, cell_size, waveform='sawtooth', double_size=True)
+def get_offset(im, square_size):
+	'''Compute the offset in pixels from the center of the image given the square size.'''
+	grid = make_grid(im, square_size, waveform='sawtooth', double_size=True)
 	# save('grid.png', grid)
 
 	bw = make_normalized_mono(im)
@@ -282,24 +280,59 @@ def get_offset(im, cell_size):
 		dis_loc = np.unravel_index(g.argmax(), g.shape)
 	cont_loc = get_interpolated_peak(g, dis_loc)
 	offset = cont_loc - tuple((s-1)/2 for s in cor_mag.shape)
-	offset %= cell_size
+	offset %= square_size
 	return offset
 
-def analyze_grid(im, cell_size, offset):
-	dy, dx = cell_size
+def cluster_splits(xs, stop_factor=2, stop_base_idx=10, thresh=5e-2):
+	'''
+	Get split points from clustering.
+
+	Output is in largest gap order.
+	'''
+	# TODO: cutoff threshold better
+	# TODO: split by pixel width
+	stop_base_idx = min(stop_base_idx, math.ceil(xs.size / 2))
+
+	xs = np.sort(xs)
+	diffs = np.diff(xs) # n - 1 elts
+	idxs = np.argpartition(diffs, -stop_base_idx)[-stop_base_idx:]
+	idxs = idxs[np.argsort(diffs[idxs])][::-1]
+	base = diffs[idxs[-1]]
+	splits = []
+	for i in idxs:
+		if diffs[i] > stop_factor * base and diffs[i] > thresh:
+			splits.append(xs[i] + diffs[i] / 2)
+	# print('splits:', splits, diffs[idxs])
+	return splits
+
+
+def analyze_grid(im, square_size, offset):
+	'''
+	Do grid analysis.
+
+	im must be RGB.
+
+	Terminalogy:
+	- square: unit of the grid
+	- board: squares in the puzzle
+	- cell: board square for an entry
+	- block: board square without an entry
+	'''
+	assert im.ndim == 3 and im.shape[-1] == 3
+	dy, dx = square_size
 	im = skimage.img_as_float(im)
 	center = tuple(s / 2 for s in im.shape[:2])
 	origin = center + offset
 
 	# create grid masks
 	width = 1 / 16
-	grid_horiz = make_grid(im, cell_size, offset, area='horizontal', width=width)[..., np.newaxis]
+	grid_horiz = make_grid(im, square_size, offset, area='horizontal', width=width)[..., np.newaxis]
 	# save('horizontal.png', grid_horiz)
-	grid_vert = make_grid(im, cell_size, offset, area='vertical', width=width)[..., np.newaxis]
+	grid_vert = make_grid(im, square_size, offset, area='vertical', width=width)[..., np.newaxis]
 	# save('vertical.png', grid_vert)
-	grid_middle = make_grid(im, cell_size, offset, area='center', width=width)[..., np.newaxis]
+	grid_middle = make_grid(im, square_size, offset, area='center', width=width)[..., np.newaxis]
 	# save('middle.png', grid_middle)
-	grid_qii = make_grid(im, cell_size, offset, area='QII', width=width)[..., np.newaxis]
+	grid_qii = make_grid(im, square_size, offset, area='QII', width=width)[..., np.newaxis]
 	# save('qii.png', grid_qii)
 	tot = np.concatenate((grid_horiz, grid_vert, grid_middle), axis=-1)
 	# save('tot.png', tot)
@@ -334,7 +367,7 @@ def analyze_grid(im, cell_size, offset):
 		grid_cen[:,x_cen] = 1
 		save('cen.png', grid_cen)
 
-	# operations to get the average/min/max value of masked cells
+	# operations to get the average/min/max value of masked squares
 	def reduceat_op(grid, ys, xs, op=np.add):
 		grid = op.reduceat(grid, ys, axis=0)
 		grid = op.reduceat(grid, xs, axis=1)
@@ -354,56 +387,106 @@ def analyze_grid(im, cell_size, offset):
 			ret = np.where(np.isnan(ret), background, ret)
 		return ret
 
-	# compute background colors of cells with median
+	# compute background colors of squares with median
 	im_full = im
 	im_full = np.insert(im_full, y_insert, np.nan, axis=0)
 	im_full = np.insert(im_full, x_insert, np.nan, axis=1)
 	# save('im_full.png', im_full)
 	im_partitioned = im_full.reshape((ny, im_full.shape[0]//ny, nx, im_full.shape[1]//nx, im_full.shape[2]))
-	cells_background = np.nanmedian(im_partitioned, axis=(1, 3))
-	save('cells_background.png', cells_background, resize=im_full)
+	squares_background = np.nanmedian(im_partitioned, axis=(1, 3))
+	save('squares_background.png', squares_background, resize=im_full)
 
-	# compute mean values of masked cells
-	cells_center = reduceat_mean(im, grid_middle, y_sep, x_sep, background=cells_background)
-	# save('cells_center.png', cells_center, resize=im)
-	cells_horiz = reduceat_mean(im, grid_horiz, y_cen, x_sep, background=cells_background)
-	save('cells_horiz.png', cells_horiz, resize=im)
-	cells_vert = reduceat_mean(im, grid_vert, y_sep, x_cen, background=cells_background)
-	save('cells_vert.png', cells_vert, resize=im)
-	cells_qii = reduceat_mean(im, grid_qii, y_sep, x_sep, background=cells_background, op=grid_color_op, mean=False)
-	save('cells_qii.png', cells_qii, resize=im)
+	# compute mean values of masked squares
+	# horizontal is bottom, vertical is right
+	squares_center = reduceat_mean(im, grid_middle, y_sep, x_sep, background=squares_background)
+	# save('squares_center.png', squares_center, resize=im)
+	squares_horiz = reduceat_mean(im, grid_horiz, y_cen, x_sep, background=squares_background)
+	save('squares_horiz.png', squares_horiz, resize=im)
+	squares_vert = reduceat_mean(im, grid_vert, y_sep, x_cen, background=squares_background)
+	save('squares_vert.png', squares_vert, resize=im)
+	squares_qii = reduceat_mean(im, grid_qii, y_sep, x_sep, background=squares_background, op=blacker, mean=False)
+	# save('squares_qii.png', squares_qii, resize=im)
 
-	# compute which cell candidates are cells in the actual grid
-	cells_topbottom = blank_color_op(np.insert(cells_horiz, 0, cells_background[0], axis=0)[:-1], cells_horiz)
-	# save('cells_topbottom.png', cells_topbottom, resize=im)
-	cells_leftright = blank_color_op(np.insert(cells_vert, 0, cells_background[:,0], axis=1)[:,:-1], cells_vert)
-	# save('cells_leftright.png', cells_leftright, resize=im)
-	cells_bordered = blank_color_op(cells_topbottom, cells_leftright)
-	save('cells_bordered.png', cells_bordered, resize=im)
+	# compute which square candidates are squares in the actual grid
+	squares_topbottom = whiter(np.insert(squares_horiz, 0, squares_background[0], axis=0)[:-1], squares_horiz)
+	# save('squares_topbottom.png', squares_topbottom, resize=im)
+	squares_leftright = whiter(np.insert(squares_vert, 0, squares_background[:,0], axis=1)[:,:-1], squares_vert)
+	# save('squares_leftright.png', squares_leftright, resize=im)
+	squares_bordered = whiter(squares_topbottom, squares_leftright)
+	# save('squares_bordered.png', squares_bordered, resize=im)
 
+	def separate(mask, values, condition, condition2, default=None, **cluster_split_kwargs):
+		'''
+		Separate values based on a condition.
+
+		mask: mask for valid squares
+		values: values to separate
+		condition: direction of separation (blacker or whiter)
+		condition2: which split point to use (blacker or whiter)
+		default: value to return if no split point (None raises a RuntimeError)
+		'''
+		values_mono = condition.reduce(values, axis=tuple(range(2, values.ndim)))
+		if mask is None:
+			valid_mono_list = values_mono.flatten()
+		else:
+			valid_mono_list = values_mono[mask]
+		splits = cluster_splits(valid_mono_list, **cluster_split_kwargs)
+		if splits:
+			split = condition2.reduce(splits)
+			ret = condition(values_mono, split) == values_mono
+		else:
+			if default is None:
+				raise RuntimeError('no splits were found')
+			ret = default
+		if mask is not None:
+			ret = np.logical_and(mask, ret)
+		return ret
+
+	# separate outside from board grid
+	board = separate(mask=None, values=squares_bordered, condition=blacker, condition2=whiter)
+	save('board.png', board, resize=im)
+	empty = np.zeros_like(board)
+
+	# separate cells from blocks
+	cells = separate(mask=board, values=squares_background, condition=whiter, condition2=blacker, default=board)
+	save('cells.png', cells, resize=im)
+
+	# separate numbered cells from empty cells
+	numbered_cells = separate(mask=cells, values=squares_qii, condition=blacker, condition2=blacker, default=empty)
+	save('numbered_cells.png', numbered_cells, resize=im)
+
+	# separate horizontal borders
+	cells_with_below = np.logical_and(cells, np.insert(cells, -1, False, axis=0)[1:])
+	cells_border_below = separate(mask=cells_with_below, values=squares_horiz, condition=blacker, condition2=blacker, default=empty, stop_factor=8)
+	save('cells_border_below.png', cells_border_below, resize=im)
+
+	# separate vertical borders
+	cells_with_right = np.logical_and(cells, np.insert(cells, -1, False, axis=1)[:,1:])
+	cells_border_right = separate(mask=cells_with_right, values=squares_vert, condition=blacker, condition2=blacker, default=empty, stop_factor=8)
+	save('cells_border_right.png', cells_border_right, resize=im)
 
 
 if __name__ == '__main__':
 	import os
 	import sys
 	root = os.path.dirname(os.path.dirname(__file__))
-	# impath = 'wild.png'
+	impath = 'wild.png'
 	# impath = 'wild_big.png'
 	# impath = 'smogon.png'
-	impath = 'fill_in_blanks.png'
+	# impath = 'fill_in_blanks.png'
 	# impath = 'smogon_70.png'
 	# impath = 'smogon_33.png'
-	im = imageio.imread(os.path.join(root, 'img_test', impath))
+	im = imageio.imread(os.path.join(root, 'img_test', impath), pilmode='RGB')
 
-	cell_size = get_cell_size(im)
-	print('cell size:', cell_size)
-	offset = get_offset(im, cell_size)
+	square_size = get_square_size(im)
+	print('square size:', square_size)
+	offset = get_offset(im, square_size)
 	print('offset:', offset)
 
-	grid = make_grid(im, cell_size, offset, waveform='sawtooth', double_size=False)
+	grid = make_grid(im, square_size, offset, waveform='sawtooth', double_size=False)
 	grid3 = grid[..., np.newaxis]
 	combined = 0.8 * skimage.img_as_float(im)[...,:3] + 0.2 * grid3
 	save('combined.png', combined)
 	save('c.png', im)
 
-	analyze_grid(im, cell_size, offset)
+	analyze_grid(im, square_size, offset)
