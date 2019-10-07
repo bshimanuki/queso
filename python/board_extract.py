@@ -9,6 +9,7 @@ import scipy.interpolate
 import scipy.signal
 import skimage
 
+from board import Board
 
 blacker = np.fmin
 whiter = np.fmax
@@ -193,8 +194,8 @@ def make_grid(im, square_size, origin=(0,0), double_size=False, waveform='square
 	'''Make a grid mask.'''
 	dy, dx = square_size
 	oy, ox = origin
-	assert waveform in ['sawtooth', 'square']
-	assert area in ['center', 'horizontal', 'vertical', 'QII']
+	assert waveform in ('sawtooth', 'square')
+	assert area in ('center', 'horizontal', 'vertical', 'QII')
 
 	bw = make_normalized_mono(im)
 	if double_size:
@@ -290,7 +291,6 @@ def cluster_splits(xs, stop_factor=2, stop_base_idx=10, thresh=5e-2):
 	Output is in largest gap order.
 	'''
 	# TODO: cutoff threshold better
-	# TODO: split by pixel width
 	stop_base_idx = min(stop_base_idx, math.ceil(xs.size / 2))
 
 	xs = np.sort(xs)
@@ -308,7 +308,7 @@ def cluster_splits(xs, stop_factor=2, stop_base_idx=10, thresh=5e-2):
 
 def analyze_grid(im, square_size, offset):
 	'''
-	Do grid analysis.
+	Do grid analysis. Returns a Board.
 
 	im must be RGB.
 
@@ -397,6 +397,7 @@ def analyze_grid(im, square_size, offset):
 	save('squares_background.png', squares_background, resize=im_full)
 
 	# compute mean values of masked squares
+	# TODO: compute by pixel width instead of mean value
 	# horizontal is bottom, vertical is right
 	squares_center = reduceat_mean(im, grid_middle, y_sep, x_sep, background=squares_background)
 	# save('squares_center.png', squares_center, resize=im)
@@ -465,14 +466,28 @@ def analyze_grid(im, square_size, offset):
 	cells_border_right = separate(mask=cells_with_right, values=squares_vert, condition=blacker, condition2=blacker, default=empty, stop_factor=8)
 	save('cells_border_right.png', cells_border_right, resize=im)
 
+	# trim to board
+	board_coords = np.nonzero(board)
+	y0 = np.min(board_coords[0])
+	x0 = np.min(board_coords[1])
+	y1 = np.max(board_coords[0])
+	x1 = np.max(board_coords[1])
+	cells_background_trimmed = squares_background[y0:y1+1, x0:x1+1]
+	cells_trimmed = cells[y0:y1+1, x0:x1+1]
+	numbered_cells_trimmed = numbered_cells[y0:y1+1, x0:x1+1]
+	cells_border_below_trimmed = cells_border_below[y0:y1+1, x0:x1+1]
+	cells_border_right_trimmed = cells_border_right[y0:y1+1, x0:x1+1]
+
+	return Board(cells_trimmed, cells_background_trimmed, numbered_cells_trimmed, cells_border_below_trimmed, cells_border_right_trimmed)
+
 
 if __name__ == '__main__':
 	import os
 	import sys
 	root = os.path.dirname(os.path.dirname(__file__))
-	impath = 'wild.png'
+	# impath = 'wild.png'
 	# impath = 'wild_big.png'
-	# impath = 'smogon.png'
+	impath = 'smogon.png'
 	# impath = 'fill_in_blanks.png'
 	# impath = 'smogon_70.png'
 	# impath = 'smogon_33.png'
@@ -489,4 +504,13 @@ if __name__ == '__main__':
 	save('combined.png', combined)
 	save('c.png', im)
 
-	analyze_grid(im, square_size, offset)
+	board = analyze_grid(im, square_size, offset)
+	output = board.format()
+	# print(output)
+	from PyQt5.Qt import QApplication, QClipboard, QMimeData
+	mime = QMimeData()
+	mime.setHtml(output)
+	app = QApplication([])
+	app.clipboard().setMimeData(mime)
+	app.clipboard().dataChanged.connect(lambda: app.exit())
+	app.exec_()

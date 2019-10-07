@@ -1,2 +1,7 @@
 # python3
 PyQt5 # GPL license
+numpy
+imageio
+scipy
+scikit-image
+opencv-python
