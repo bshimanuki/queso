@@ -92,6 +92,15 @@ class Board(object):
 		self.grid = np.array([[Square(*args) for args in zip(*row)] for row in zip(cells, background, bar_below, bar_right)])
 		self.entries = defaultdict(list)
 
+		possibly_numbered_cells = np.zeros_like(cells)
+		possibly_numbered_cells |= np.insert(np.logical_not(cells), 0, True, axis=0)[:-1]
+		possibly_numbered_cells |= np.insert(np.logical_not(cells), 0, True, axis=1)[:,:-1]
+		possibly_numbered_cells |= np.insert(np.logical_not(bar_below), 0, False, axis=0)[:-1]
+		possibly_numbered_cells |= np.insert(np.logical_not(bar_right), 0, False, axis=1)[:,:-1]
+		possibly_numbered_cells &= cells
+		if numbered_cells.any() and (numbered_cells != possibly_numbered_cells).all():
+			print('Warning: numbered cells don\'t match board shape')
+
 		n = 0
 		for y in range(self.shape[0]):
 			entry = None

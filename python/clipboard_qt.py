@@ -1,17 +1,26 @@
+import functools
+import os
+
 from PyQt5.Qt import QApplication, QClipboard, QMimeData
 
-mime = QMimeData()
-mime.setText('test')
-mime.setHtml('<meta http-equiv="content-type" content="text/html; charset=utf-8"><style type="text/css"><!--td {border: 1px solid #ccc;}br {mso-data-placement:same-cell;}--></style><span style="font-size:10pt;font-family:Arial;font-style:normal;text-decoration:line-through;color:#ff0000;" data-sheets-value="{&quot;1&quot;:2,&quot;2&quot;:&quot;c&quot;}" data-sheets-userformat="{&quot;2&quot;:330241,&quot;3&quot;:{&quot;1&quot;:0},&quot;12&quot;:0,&quot;14&quot;:{&quot;1&quot;:2,&quot;2&quot;:16711680},&quot;19&quot;:1,&quot;21&quot;:0}">c</span>')
-# mime.data()
-# mime.data('STRING')
-# mime.data('STRING').data()
-app = QApplication([])
-clip = app.clipboard()
-clip.setMimeData(mime)
+def get_clipboard(target='STRING'):
+	app = QApplication([])
+	clip = app.clipboard()
+	mime = clip.mimeData()
+	return mime.data(target).data()
 
-def kill_app():
-	app.exit()
-clip.dataChanged.connect(kill_app)
+def set_clipboard(text=None, html=None):
+	if text is not None and html is not None:
+		raise ValueError()
 
-app.exec_()
+	if not os.fork():
+		mime = QMimeData()
+		if text is not None:
+			mime.setText(text)
+		if html is not None:
+			mime.setHtml(html)
+		app = QApplication([])
+		clip = app.clipboard()
+		clip.setMimeData(mime)
+		clip.dataChanged.connect(app.exit)
+		app.exec_()

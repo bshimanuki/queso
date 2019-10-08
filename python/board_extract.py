@@ -10,6 +10,7 @@ import scipy.signal
 import skimage
 
 from board import Board
+from clipboard_qt import set_clipboard
 
 blacker = np.fmin
 whiter = np.fmax
@@ -506,11 +507,4 @@ if __name__ == '__main__':
 
 	board = analyze_grid(im, square_size, offset)
 	output = board.format()
-	# print(output)
-	from PyQt5.Qt import QApplication, QClipboard, QMimeData
-	mime = QMimeData()
-	mime.setHtml(output)
-	app = QApplication([])
-	app.clipboard().setMimeData(mime)
-	app.clipboard().dataChanged.connect(lambda: app.exit())
-	app.exec_()
+	set_clipboard(html=output)
