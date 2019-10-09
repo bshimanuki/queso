@@ -35,14 +35,32 @@ class Square(object):
 		self.bar_below = bar_below
 		self.bar_right = bar_right
 		self.number = None
+
 		self.entries = {direction: None for direction in Direction}
 		self.entry_indices = {direction: None for direction in Direction}
+
+		self.up = None
+		self.left = None
+		self.down = None
+		self.right = None
 
 	def format(self, output):
 		assert output in ('plain', 'html')
 		strings = []
 		if output == 'html':
-			strings.append('<td style="background-color:{};">'.format(self.color.format(output)))
+			border_style = '2px solid #000000'
+			styles = []
+			styles.append('background-color:{};'.format(self.color.format(output)))
+			if self.up is None or self.up.bar_below:
+				styles.append('border-top:{};'.format(border_style))
+			if self.left is None or self.left.bar_right:
+				styles.append('border-left:{};'.format(border_style))
+			if self.down is None or self.bar_below:
+				styles.append('border-bottom:{};'.format(border_style))
+			if self.right is None or self.bar_right:
+				styles.append('border-right:{};'.format(border_style))
+			style = ''.join(styles)
+			strings.append('<td style="{}">'.format(style))
 		if self.number:
 			strings.append(str(self.number))
 		if output == 'html':
@@ -109,6 +127,19 @@ class Board(object):
 				if numbered_cells[y, x]:
 					n += 1
 					square.number = n
+				if y - 1 >= 0:
+					square.up = self.grid[y-1, x];
+				if x - 1 >= 0:
+					square.left = self.grid[y, x-1];
+				if y + 1 < self.grid.shape[0]:
+					square.down = self.grid[y+1, x];
+				if x + 1 < self.grid.shape[1]:
+					square.right = self.grid[y, x+1];
+		for y in range(self.shape[0]):
+			entry = None
+			for x in range(self.shape[1]):
+				square = self.grid[y, x]
+				if square.number:
 					if x == 0 or not self.grid[y, x-1].is_cell or self.grid[y, x-1].bar_right:
 						entry = Entry(square.number, Direction.ACROSS)
 						self.entries[Direction.ACROSS].append(entry)
