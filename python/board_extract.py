@@ -12,11 +12,13 @@ import skimage
 from board import Board
 from clipboard_qt import set_clipboard
 
+from typing import List, Optional, Tuple
+
 blacker = np.fmin
 whiter = np.fmax
 
 
-def autocorrelate(x):
+def autocorrelate(x: np.ndarray) -> np.ndarray:
 	'''
 	Get autocorrelation of an image.
 
@@ -33,7 +35,7 @@ def autocorrelate(x):
 		ret = np.moveaxis(np.moveaxis(ret, i, 0)[cutoff:m.size-cutoff], 0, i)
 	return ret
 
-def get_mountain_slice(x, mid):
+def get_mountain_slice(x: np.ndarray, mid: int) -> slice:
 	'''Get a slice from a peak at index mid to the bottom of both sides.'''
 	low = mid
 	while low-1 > 0 and x[low-1] < x[low]:
@@ -43,14 +45,14 @@ def get_mountain_slice(x, mid):
 		high += 1
 	return slice(low, high)
 
-def is_far_from_edge(im, loc, thresh=1):
+def is_far_from_edge(im: np.ndarray, loc: Tuple[int, int], thresh: int = 1) -> bool:
 	assert im.ndim == len(loc)
 	for s, x in zip(im.shape, loc):
 		if x - thresh < 0 or x + thresh >= s:
 			return False
 	return True
 
-def get_interpolated_peak(im, dis_loc, delta=1, order=2):
+def get_interpolated_peak(im: np.ndarray, dis_loc: Tuple[int, int], delta: int = 1, order: int = 2) -> np.ndarray:
 	'''Get the continuous location of a peak from a discrete 2D sample.'''
 	assert is_far_from_edge(im, dis_loc, delta)
 	y, x = dis_loc
@@ -69,7 +71,7 @@ def get_interpolated_peak(im, dis_loc, delta=1, order=2):
 	)
 	return result.x
 
-def save_color(fname, im):
+def save_color(fname: str, im: np.ndarray) -> None:
 	'''Save monocromatic image in color as a colormap.'''
 	out = np.asarray(im)
 	out = np.interp(out, (out.min(), out.max()), (0, 1))
@@ -79,7 +81,7 @@ def save_color(fname, im):
 	out = cv2.cvtColor(cv2.applyColorMap(out, cv2.COLORMAP_INFERNO), cv2.COLOR_BGR2RGB)
 	imageio.imwrite(fname, out)
 
-def save(fname, im, resize=None):
+def save(fname: str, im: np.ndarray, resize: Optional[np.ndarray] = None) -> None:
 	'''Save image.'''
 	out = np.asarray(im)
 	with warnings.catch_warnings():
@@ -89,7 +91,7 @@ def save(fname, im, resize=None):
 		out = cv2.resize(out, resize.shape[1::-1], interpolation=cv2.INTER_NEAREST)
 	imageio.imwrite(fname, out)
 
-def make_normalized_mono(im):
+def make_normalized_mono(im: np.ndarray) -> np.ndarray:
 	'''Convert to single channel (darkest channel) and normalize the image.'''
 	bw = skimage.img_as_float(im)
 	while bw.ndim > 2:
@@ -97,7 +99,7 @@ def make_normalized_mono(im):
 	bw -= np.mean(bw)
 	return bw
 
-def get_square_size(im):
+def get_square_size(im: np.ndarray) -> Tuple[float, float]:
 	bw = make_normalized_mono(im)
 	ac = autocorrelate(bw)
 	ac_mag = np.abs(ac)
@@ -142,14 +144,14 @@ def get_square_size(im):
 	# print(peak_y)
 	# print(peak_x)
 
-	def get_gcd(xs, init_max_denom=6, init_thresh=1e-1):
+	def get_gcd(xs: List[float], init_max_denom: int = 6, init_thresh: float = 1e-1) -> Tuple[float, int]:
 		'Returns gcd of inliers and number of inliers.'
 		max_denom = init_max_denom
 		thresh = init_thresh
 		denom_power_factor = 0.9
 		thresh_scaling_factor = 0.8
 
-		def is_approx(a, b, thresh=0.1):
+		def is_approx(a: float, b: float, thresh: float = 0.1) -> bool:
 			return a + thresh > b and a < b + thresh
 		weight = 0
 		val = None
@@ -178,6 +180,7 @@ def get_square_size(im):
 					total = val * weight + x_val * x_weight
 					weight += x_weight
 					val = total / weight
+		assert val is not None
 		return val, n
 
 	y, _ = get_gcd(peak_y)
@@ -191,7 +194,7 @@ def get_square_size(im):
 
 	return y, x
 
-def make_grid(im, square_size, origin=(0,0), double_size=False, waveform='square', area='center', width=1/4):
+def make_grid(im: np.ndarray, square_size: Tuple[float, float], origin: Tuple[float, float] = (0, 0), double_size: bool = False, waveform: str = 'square', area: str = 'center', width: float = 1/4):
 	'''Make a grid mask.'''
 	dy, dx = square_size
 	oy, ox = origin
@@ -264,7 +267,7 @@ def make_grid(im, square_size, origin=(0,0), double_size=False, waveform='square
 		raise NotImplemented()
 	return grid
 
-def get_offset(im, square_size):
+def get_offset(im: np.ndarray, square_size: Tuple[float, float]) -> np.ndarray:
 	'''Compute the offset in pixels from the center of the image given the square size.'''
 	grid = make_grid(im, square_size, waveform='sawtooth', double_size=True)
 	# save('grid.png', grid)
@@ -285,7 +288,7 @@ def get_offset(im, square_size):
 	offset %= square_size
 	return offset
 
-def cluster_splits(xs, stop_factor=2, stop_base_idx=10, thresh=5e-2):
+def cluster_splits(xs: np.ndarray, stop_factor: float = 2, stop_base_idx: int = 10, thresh:float = 5e-2) -> List[float]:
 	'''
 	Get split points from clustering.
 
@@ -307,7 +310,7 @@ def cluster_splits(xs, stop_factor=2, stop_base_idx=10, thresh=5e-2):
 	return splits
 
 
-def analyze_grid(im, square_size, offset):
+def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple[float, float]) -> Board:
 	'''
 	Do grid analysis. Returns a Board.
 
@@ -417,7 +420,7 @@ def analyze_grid(im, square_size, offset):
 	squares_bordered = whiter(squares_topbottom, squares_leftright)
 	# save('squares_bordered.png', squares_bordered, resize=im)
 
-	def separate(mask, values, condition, condition2, default=None, **cluster_split_kwargs):
+	def separate(mask: np.ndarray, values: np.ndarray, condition: np.ufunc, condition2: np.ufunc, default: Optional[np.ndarray] = None, **cluster_split_kwargs) -> np.ndarray:
 		'''
 		Separate values based on a condition.
 

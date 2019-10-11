@@ -1,4 +1,5 @@
 /bin
 /obj
 
+.mypy_cache
 *.py[cdo]

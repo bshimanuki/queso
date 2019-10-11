@@ -4,10 +4,11 @@ import math
 
 import numpy as np
 import skimage
+from typing import DefaultDict, Dict, List, Optional
 
 
 class Color(object):
-	def __init__(self, c):
+	def __init__(self, c: np.ndarray):
 		if c.size == 1:
 			self.rgb = np.full(3, c.item())
 		elif c.size == 3:
@@ -17,7 +18,7 @@ class Color(object):
 			raise ValueError()
 		self.rgb = skimage.img_as_float(self.rgb)
 
-	def format(self, output):
+	def format(self, output: str) -> str:
 		assert output in ('plain', 'html')
 		strings = []
 		if output == 'html':
@@ -29,22 +30,22 @@ class Color(object):
 
 
 class Square(object):
-	def __init__(self, is_cell, color, bar_below, bar_right):
+	def __init__(self, is_cell: bool, color: np.ndarray, bar_below: bool, bar_right: bool):
 		self.is_cell = is_cell
 		self.color = Color(color)
 		self.bar_below = bar_below
 		self.bar_right = bar_right
 		self.number = None
 
-		self.entries = {direction: None for direction in Direction}
-		self.entry_indices = {direction: None for direction in Direction}
+		self.entries = {direction: None for direction in Direction} # type: Dict[Direction, Optional[Entry]]
+		self.entry_indices = {direction: None for direction in Direction} # type: Dict[Direction, Optional[int]]
 
 		self.up = None
 		self.left = None
 		self.down = None
 		self.right = None
 
-	def format(self, output):
+	def format(self, output: str) -> str:
 		assert output in ('plain', 'html')
 		strings = []
 		if output == 'html':
@@ -71,20 +72,20 @@ class Square(object):
 
 
 class Direction(enum.Enum):
-	DOWN = enum.auto()
-	ACROSS = enum.auto()
+	DOWN = 0
+	ACROSS = 1
 
 
 class Entry(object):
-	def __init__(self, number, direction):
-		self.cells = []
+	def __init__(self, number: int, direction: Direction):
+		self.cells = [] # type: List[Square]
 		self.number = number
 		self.direction = direction
 
 	def __len__(self):
 		return len(self.cells)
 
-	def append(self, cell):
+	def append(self, cell: Square) -> None:
 		cell.entries[self.direction] = self
 		cell.entry_indices[self.direction] = len(self)
 		self.cells.append(cell)
@@ -96,11 +97,11 @@ class Board(object):
 	'''
 	def __init__(
 			self,
-			cells,
-			background,
-			numbered_cells,
-			bar_below,
-			bar_right,
+			cells: np.ndarray,
+			background: np.ndarray,
+			numbered_cells: np.ndarray,
+			bar_below: np.ndarray,
+			bar_right: np.ndarray,
 	):
 		assert len(cells.shape) == 2
 		assert background.shape[:2] == cells.shape
@@ -108,7 +109,7 @@ class Board(object):
 		assert bar_below.shape == cells.shape
 		assert bar_right.shape == cells.shape
 		self.grid = np.array([[Square(*args) for args in zip(*row)] for row in zip(cells, background, bar_below, bar_right)])
-		self.entries = defaultdict(list)
+		self.entries = defaultdict(list) # type: DefaultDict[Direction, List[Entry]]
 
 		possibly_numbered_cells = np.zeros_like(cells)
 		possibly_numbered_cells |= np.insert(np.logical_not(cells), 0, True, axis=0)[:-1]
@@ -165,10 +166,10 @@ class Board(object):
 					entry = None
 
 	@property
-	def shape(self):
+	def shape(self) -> tuple:
 		return self.grid.shape
 
-	def format(self, output='html'):
+	def format(self, output='html') -> str:
 		assert output in ('plain', 'html')
 		strings = []
 		if output == 'html':
