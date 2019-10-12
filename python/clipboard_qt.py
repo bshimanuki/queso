@@ -24,3 +24,4 @@ def set_clipboard(text=None, html=None):
 		clip.setMimeData(mime)
 		clip.dataChanged.connect(app.exit)
 		app.exec_()
+		exit()

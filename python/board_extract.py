@@ -485,18 +485,7 @@ def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple
 	return Board(cells_trimmed, cells_background_trimmed, numbered_cells_trimmed, cells_border_below_trimmed, cells_border_right_trimmed)
 
 
-if __name__ == '__main__':
-	import os
-	import sys
-	root = os.path.dirname(os.path.dirname(__file__))
-	# impath = 'wild.png'
-	# impath = 'wild_big.png'
-	impath = 'smogon.png'
-	# impath = 'fill_in_blanks.png'
-	# impath = 'smogon_70.png'
-	# impath = 'smogon_33.png'
-	im = imageio.imread(os.path.join(root, 'img_test', impath), pilmode='RGB')
-
+def make_board(im : np.ndarray) -> Board:
 	square_size = get_square_size(im)
 	print('square size:', square_size)
 	offset = get_offset(im, square_size)
@@ -509,5 +498,25 @@ if __name__ == '__main__':
 	save('c.png', im)
 
 	board = analyze_grid(im, square_size, offset)
+
+	return board
+
+
+if __name__ == '__main__':
+	import os
+	import sys
+	root = os.path.dirname(os.path.dirname(__file__))
+	# impath = 'wild.png'
+	# impath = 'wild_big.png'
+	impath = 'smogon.png'
+	# impath = 'fill_in_blanks.png'
+	# impath = 'smogon_70.png'
+	# impath = 'smogon_33.png'
+	im = imageio.imread(os.path.join(root, 'img_test', impath), pilmode='RGB')
+
+	board = make_board(im)
 	output = board.format()
 	set_clipboard(html=output)
+
+	board.update_cells()
+	board.update_entries()
