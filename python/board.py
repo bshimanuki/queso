@@ -1,10 +1,9 @@
-from collections import defaultdict
 import enum
 import math
 
 import numpy as np
 import skimage
-from typing import cast, DefaultDict, Dict, List, Optional, Sequence, Tuple, Union
+from typing import cast, List, Optional, Sequence, Tuple, Union
 
 from ngram import ngram
 
@@ -81,6 +80,8 @@ class Square(object):
 	def format(self, **kwargs) -> str:
 		output = kwargs.get('output', 'html')
 		fill = kwargs.get('fill', False)
+		number = kwargs.get('number', True)
+		probabilities = kwargs.get('probabilities', False)
 		assert output in ('plain', 'html')
 		strings = []
 		if output == 'html':
@@ -97,11 +98,15 @@ class Square(object):
 				styles.append('border-right:{};'.format(border_style))
 			style = ''.join(styles)
 			strings.append('<td style="{}">'.format(style))
-		if self.number:
+		if number and self.number is not None:
 			strings.append(str(self.number))
-		if fill and self.is_cell:
-			c, prob = self.get_contents()
-			strings.append(c)
+		if self.is_cell:
+			if fill:
+				c, prob = self.get_contents()
+				strings.append(c)
+			elif probabilities and not number:
+				c, prob = self.get_contents()
+				strings.append(str(prob))
 		if output == 'html':
 			strings.append('</td>')
 		elif output == 'plain':
@@ -138,7 +143,7 @@ class Entry(object):
 		self.length = 0
 
 		cell = self.board.grid[start]
-		while cell is not None:
+		while cell is not None and cell.is_cell:
 			cell.set_entry(self)
 			if direction == Direction.DOWN:
 				if cell.bar_below:
@@ -160,7 +165,7 @@ class Entry(object):
 
 		# probability
 		# shared memory going in the crossed direction
-		self.p_cells = self.board.p_cells[self.slice + (not self.direction,)]
+		self.p_cells = self.board.p_cells[self.slice + (1 - self.direction,)]
 		self.set_answers([None], [1])
 
 	def __len__(self):
@@ -182,7 +187,7 @@ class Entry(object):
 				# TODO: trigrams?
 				self.p[i] *= np.prod(self.p_cells @ ngram.unigram)
 			else:
-				self.p[i] *= np.prod(np.choose(self.p_cells.T, answer))
+				self.p[i] *= np.prod(np.choose(answer, self.p_cells.T))
 		self.p /= self.p.sum()
 
 
@@ -215,7 +220,7 @@ class Board(object):
 		self.p_cells = np.tile(ngram.unigram[np.newaxis, np.newaxis, np.newaxis, :], self.shape + (2, 1)) # y, x, direction, letter
 
 		self.grid = np.array([[Square(*args) for args in zip(*row)] for row in zip(cells, background, bar_below, bar_right, self.p_cells)])
-		self.entries = defaultdict(list) # type: DefaultDict[Direction, List[Entry]]
+		self.entries = [[], []] # type: List[List[Entry]]
 
 		possibly_numbered_cells = np.zeros_like(cells)
 		possibly_numbered_cells |= np.insert(np.logical_not(cells), 0, True, axis=0)[:-1]
@@ -289,6 +294,6 @@ class Board(object):
 				square.update_p()
 
 	def update_entries(self) -> None:
-		for entries in self.entries.values():
+		for entries in self.entries:
 			for entry in entries:
 				entry.update_p()

@@ -486,6 +486,10 @@ def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple
 
 
 def make_board(im : np.ndarray) -> Board:
+	if im.ndim == 3 and im.shape[-1] == 4:
+		# remove alpha channel
+		im = im[..., :3]
+
 	square_size = get_square_size(im)
 	print('square size:', square_size)
 	offset = get_offset(im, square_size)
@@ -512,7 +516,7 @@ if __name__ == '__main__':
 	# impath = 'fill_in_blanks.png'
 	# impath = 'smogon_70.png'
 	# impath = 'smogon_33.png'
-	im = imageio.imread(os.path.join(root, 'img_test', impath), pilmode='RGB')
+	im = imageio.imread(os.path.join(root, 'img_test', impath))
 
 	board = make_board(im)
 	output = board.format()
