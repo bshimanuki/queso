@@ -1,4 +1,5 @@
 import enum
+import functools
 import math
 
 import numpy as np
@@ -68,9 +69,14 @@ class Square(object):
 		self.entries = [None] * len(Direction) # type: List[Optional[Entry]]
 		self.entry_indices = [None] * len(Direction) # type: List[Optional[int]]
 
-	def get_contents(self) -> Tuple[str, float]:
-		'''Get most probable value and probability.'''
-		p = np.prod(self.p, axis=0)
+	def get_contents(self, **kwargs) -> Tuple[str, float]:
+		'''
+		Get most probable value and probability.
+
+		reduce_op is optionally function to combine down and across probabilities.
+		'''
+		reduce_op = kwargs.get('reduce_op', functools.partial(np.prod, axis=0))
+		p = reduce_op(self.p)
 		p /= p.sum()
 		idx = np.argmax(p)
 		prob = p[idx]
@@ -102,10 +108,10 @@ class Square(object):
 			strings.append(str(self.number))
 		if self.is_cell:
 			if fill:
-				c, prob = self.get_contents()
+				c, prob = self.get_contents(**kwargs)
 				strings.append(c)
 			elif probabilities and not number:
-				c, prob = self.get_contents()
+				c, prob = self.get_contents(**kwargs)
 				strings.append(str(prob))
 		if output == 'html':
 			strings.append('</td>')

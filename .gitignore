@@ -1,5 +1,6 @@
 /bin
 /obj
+/data
 
 .mypy_cache
 *.py[cdo]

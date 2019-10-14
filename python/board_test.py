@@ -1,8 +1,11 @@
 from collections import defaultdict
+import functools
+import operator
 import os
 import sys
 
 import imageio
+import numpy as np
 
 from board import Board
 from board_extract import make_board
@@ -15,7 +18,7 @@ if __name__ == '__main__':
     im = imageio.imread(os.path.join(root, 'img_test', impath))
 
     board = make_board(im)
-    answers_file = os.path.join(root, 'smogon-answers.txt')
+    answers_file = os.path.join(root, 'smogon-answers-partial.txt')
     all_answers = defaultdict(lambda: [None])
     for line in open(answers_file):
         for word in line.strip().split():
@@ -29,9 +32,12 @@ if __name__ == '__main__':
             scores[0] = 30
             entry.set_answers(answers, scores)
 
-    for i in range(50):
+    for i in range(30):
         board.update_cells()
         board.update_entries()
 
     output = board.format(fill=True, number=False, probabilities=False)
+    # output = board.format(fill=False, number=False, probabilities=True)
+    # output = board.format(fill=False, number=False, probabilities=True, reduce_op=operator.itemgetter(0))
+    # output = board.format(fill=False, number=False, probabilities=True, reduce_op=functools.partial(np.max, axis=0))
     set_clipboard(html=output)
