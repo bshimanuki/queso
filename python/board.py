@@ -49,16 +49,33 @@ class Color(object):
 
 
 class Square(object):
-	def __init__(self, is_cell: bool, color: np.ndarray, bar_below: bool, bar_right: bool, p: np.ndarray):
-		# board
-		self.is_cell = is_cell
-		self.color = Color(color)
-		self.bar_below = bar_below
-		self.bar_right = bar_right
-		self.number = None # type: Optional[int]
+	@property
+	def is_cell(self):
+		return self.board.cells[self.y, self.x]
 
-		# p is shared memory with a Board for the probability distribution going down and across.
-		self.p = p
+	@property
+	def bar_below(self):
+		return self.board.bar_below[self.y, self.x]
+
+	@property
+	def bar_right(self):
+		return self.board.bar_right[self.y, self.x]
+
+	@property
+	def p(self):
+		return self.board.p_cells[self.y, self.x]
+
+	@property
+	def p_next(self):
+		return self.board.p_cells_next[self.y, self.x]
+
+	def __init__(self, board: 'Board', y: int, x: int):
+		# board
+		self.board = board
+		self.y = y
+		self.x = x
+		self.color = Color(self.board.background[self.y, self.x])
+		self.number = None # type: Optional[int]
 
 		self.up = None # type: Optional[Square]
 		self.left = None # type: Optional[Square]
@@ -126,16 +143,40 @@ class Square(object):
 
 	def update_p(self) -> None:
 		if self.is_cell:
-			for p, entry, index in zip(self.p, self.entries, self.entry_indices):
+			for direction in Direction:
+				entry = self.entries[direction]
+				index = self.entry_indices[direction]
 				if entry is not None:
 					assert index is not None
-					p[...] = 0
+
+					if direction == Direction.DOWN:
+						cell_before = self.up
+						cell_after = self.down
+					else:
+						cell_before = self.left
+						cell_after = self.right
+					if index == 0:
+						cell_before = None
+					if index == len(entry) - 1:
+						cell_after = None
+					p_before = None if cell_before is None else cell_before.p[1 - direction]
+					p_after = None if cell_after is None else cell_after.p[1 - direction]
+
+					self.p_next[direction] = 0
 					for answer, answer_p in zip(entry.answers, entry.p):
 						if answer is None:
 							# TODO: trigram factors
-							p += answer_p * ngram.unigram
+							if p_before is None and p_after is None:
+								self.p_next[direction] += answer_p * ngram.unigram
+							elif p_before is None:
+								self.p_next[direction] += answer_p * ngram.bigram @ p_after
+							elif p_after is None:
+								self.p_next[direction] += answer_p * p_before @ ngram.bigram
+							else:
+								self.p_next[direction] += answer_p * p_before @ ngram.trigram @ p_after
 						else:
-							p[answer[index]] += answer_p
+							self.p_next[direction, answer[index]] += answer_p
+					self.p_next[direction] /= self.p_next[direction].sum()
 
 
 class Entry(object):
@@ -191,7 +232,13 @@ class Entry(object):
 		for i, answer in enumerate(self.answers):
 			if answer is None:
 				# TODO: trigrams?
-				self.p[i] *= np.prod(self.p_cells @ ngram.unigram)
+				if len(self.p_cells) == 1:
+					self.p[i] *= ngram.unigram @ self.p_cells[0]
+				elif len(self.p_cells) > 1:
+					self.p[i] *= (ngram.bigram @ self.p_cells[1] @ self.p_cells[0]) ** (1 / 2)
+					self.p[i] *= (ngram.bigram @ self.p_cells[-1] @ self.p_cells[-2]) ** (1 / 2)
+					for j in range(len(self.p_cells) - 2):
+						self.p[i] *= (ngram.trigram @ self.p_cells[j+2] @ self.p_cells[j+1] @ self.p_cells[j]) ** (1 / 3)
 			else:
 				self.p[i] *= np.prod(np.choose(answer, self.p_cells.T))
 		self.p /= self.p.sum()
@@ -201,6 +248,10 @@ class Board(object):
 	'''
 	Class to Represent a board.
 	'''
+	@property
+	def shape(self):
+		return self.cells.shape
+
 	def __init__(
 			self,
 			cells: np.ndarray,
@@ -222,10 +273,14 @@ class Board(object):
 			bar_right = np.zeros_like(cells)
 		assert bar_right.shape == cells.shape
 
-		self.shape = cells.shape
+		self.cells = cells
 		self.p_cells = np.tile(ngram.unigram[np.newaxis, np.newaxis, np.newaxis, :], self.shape + (2, 1)) # y, x, direction, letter
+		self.p_cells_next = np.tile(ngram.unigram[np.newaxis, np.newaxis, np.newaxis, :], self.shape + (2, 1)) # y, x, direction, letter
+		self.background = background
+		self.bar_below = bar_below
+		self.bar_right = bar_right
 
-		self.grid = np.array([[Square(*args) for args in zip(*row)] for row in zip(cells, background, bar_below, bar_right, self.p_cells)])
+		self.grid = np.array([[Square(self, y, x) for x in range(self.shape[1])] for y in range(self.shape[0])])
 		self.entries = [[], []] # type: List[List[Entry]]
 
 		possibly_numbered_cells = np.zeros_like(cells)
@@ -298,6 +353,7 @@ class Board(object):
 		for row in self.grid:
 			for square in row:
 				square.update_p()
+		self.p_cells, self.p_cells_next = self.p_cells_next, self.p_cells
 
 	def update_entries(self) -> None:
 		for entries in self.entries:

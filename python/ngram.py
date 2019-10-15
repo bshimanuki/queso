@@ -14,21 +14,24 @@ class NGram(object):
         self._bigram = None # type: Optional[np.ndarray]
         self._trigram = None # type: Optional[np.ndarray]
         if fname:
-            self.computed = True
             data = np.load(fname)
-            self._unigram = data['unigram']
-            self._bigram = data['bigram']
-            self._trigram = data['trigram']
+            self._unigram_counts = data['unigram_counts'].astype(np.float)
+            self._bigram_counts = data['bigram_counts'].astype(np.float)
+            self._trigram_counts = data['trigram_counts'].astype(np.float)
+        else:
+            self._unigram_counts = np.ones((self.n,), dtype=np.float)
+            self._bigram_counts = np.ones((self.n,)*2, dtype=np.float)
+            self._trigram_counts = np.ones((self.n,)*3, dtype=np.float)
 
-
-    def _compute(self) -> None:
+    def _compute(self, smooth=0.2) -> None:
         # TODO: compute frequencies
-        self._unigram = np.ones((self.n,), dtype=np.float)
-        self._bigram = np.ones((self.n,)*2, dtype=np.float)
-        self._trigram = np.ones((self.n,)*3, dtype=np.float)
+        self._unigram = self._unigram_counts / self._unigram_counts.sum()
+        self._bigram = self._bigram_counts / self._bigram_counts.sum()
+        self._trigram = self._trigram_counts / self._trigram_counts.sum()
 
-        self._unigram /= self._unigram.sum()
+        self._bigram = smooth * np.outer(self._unigram, self._unigram) + (1 - smooth) * self._bigram
         self._bigram /= self._bigram.sum()
+        self._trigram = smooth * np.einsum('ij,j,jk->ijk', self._bigram, 1 / self._unigram, self._bigram) + (1 - smooth) * self._trigram
         self._trigram /= self._trigram.sum()
 
         self.computed = True
@@ -58,9 +61,9 @@ ngram = NGram(fname if os.path.exists(fname) else None)
 def make_data(wordlist_file : str):
     from board import to_uint
     n = 26
-    unigram = np.ones((n,), dtype=np.float)
-    bigram = np.ones((n,)*2, dtype=np.float)
-    trigram = np.ones((n,)*3, dtype=np.float)
+    unigram = np.ones((n,), dtype=np.int)
+    bigram = np.ones((n,)*2, dtype=np.int)
+    trigram = np.ones((n,)*3, dtype=np.int)
     with open(wordlist_file) as f:
         for line in f:
             answers = line.split('\t')[0]
@@ -76,10 +79,7 @@ def make_data(wordlist_file : str):
                     if i + 2 < values.size:
                         trigram[tuple(values[i:i+2])] += 1
 
-    unigram /= unigram.sum()
-    bigram /= bigram.sum()
-    trigram /= trigram.sum()
-    np.savez(fname, unigram=unigram, bigram=bigram, trigram=trigram)
+    np.savez(fname, unigram_counts=unigram, bigram_counts=bigram, trigram_counts=trigram)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
