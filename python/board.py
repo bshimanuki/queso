@@ -18,6 +18,9 @@ def answerize(answer: str) -> str:
 def to_uint(answer: str) -> np.ndarray:
 	ret = np.fromstring(answer, dtype=np.uint8) - ord('A')
 	return ret
+def to_str(answer: np.ndarray) -> str:
+	ret = (answer + ord('A')).tostring().decode('ascii')
+	return ret
 
 
 class Direction(enum.IntEnum):
@@ -48,25 +51,64 @@ class Color(object):
 		return ''.join(strings)
 
 
+def marginalize_trigram(
+		prepre: Optional[np.ndarray],
+		pre: Optional[np.ndarray],
+		post: Optional[np.ndarray],
+		postpost: Optional[np.ndarray]
+) -> np.ndarray:
+	num = sum(1 for x in (prepre, pre, post, postpost) if x is not None)
+	if num == 0:
+		p = ngram.unigram
+	elif num == 1:
+		p = ngram.bigram
+	elif num == 2:
+		p = ngram.trigram
+	else:
+		raise ValueError('too many parameters for marginalizing a trigram')
+	if prepre is not None:
+		p = prepre @ p
+	if pre is not None:
+		p = pre @ p
+	if postpost is not None:
+		p = p @ postpost
+	if post is not None:
+		p = p @ post
+	return p
+
+
+def marginalize_trigram_smoothed(
+		prepre: Optional[np.ndarray],
+		pre: Optional[np.ndarray],
+		post: Optional[np.ndarray],
+		postpost: Optional[np.ndarray]
+) -> np.ndarray:
+	before = marginalize_trigram(prepre, pre, None, None)
+	mid = marginalize_trigram(None, pre, post, None)
+	after = marginalize_trigram(None, None, post, postpost)
+	ret =  (before * mid * after) ** (1 / 3)
+	return ret
+
+
 class Square(object):
 	@property
-	def is_cell(self):
+	def is_cell(self) -> bool:
 		return self.board.cells[self.y, self.x]
 
 	@property
-	def bar_below(self):
+	def bar_below(self) -> bool:
 		return self.board.bar_below[self.y, self.x]
 
 	@property
-	def bar_right(self):
+	def bar_right(self) -> bool:
 		return self.board.bar_right[self.y, self.x]
 
 	@property
-	def p(self):
+	def p(self) -> np.ndarray: # (direction, letter_dist)
 		return self.board.p_cells[self.y, self.x]
 
 	@property
-	def p_next(self):
+	def p_next(self) -> np.ndarray: # (letter_dist,)
 		return self.board.p_cells_next[self.y, self.x]
 
 	def __init__(self, board: 'Board', y: int, x: int):
@@ -137,7 +179,7 @@ class Square(object):
 		return ''.join(strings)
 
 	def set_entry(self, entry: 'Entry') -> None:
-		direction = entry.direction # type: ignore forward reference
+		direction = entry.direction # type: ignore # forward reference
 		self.entries[direction] = entry
 		self.entry_indices[direction] = len(entry)
 
@@ -149,37 +191,40 @@ class Square(object):
 				if entry is not None:
 					assert index is not None
 
-					if direction == Direction.DOWN:
-						cell_before = self.up
-						cell_after = self.down
-					else:
-						cell_before = self.left
-						cell_after = self.right
-					if index == 0:
-						cell_before = None
-					if index == len(entry) - 1:
-						cell_after = None
-					p_before = None if cell_before is None else cell_before.p[1 - direction]
-					p_after = None if cell_after is None else cell_after.p[1 - direction]
+					surrounding = [
+						entry.cells[i].p[1 - direction] # type: ignore # forward reference
+						if i >= 0 and i < len(entry)
+						else None
+						for i in range(index - 2, index + 3)
+						if i != index
+					]
+
+					# remove self from aggregated factor in factor graph
+					answer_ps = np.array(entry.p)
+					for i, answer in enumerate(entry.answers):
+						if answer is None:
+							answer_ps[i] /= np.dot(self.p[1 - direction], ngram.uniform)
+						else:
+							answer_ps[i] /= self.p[1 - direction, answer[index]]
+					answer_ps /= answer_ps.sum()
 
 					self.p_next[direction] = 0
-					for answer, answer_p in zip(entry.answers, entry.p):
+					for answer, answer_p in zip(entry.answers, answer_ps):
 						if answer is None:
 							# TODO: trigram factors
-							if p_before is None and p_after is None:
-								self.p_next[direction] += answer_p * ngram.unigram
-							elif p_before is None:
-								self.p_next[direction] += answer_p * ngram.bigram @ p_after
-							elif p_after is None:
-								self.p_next[direction] += answer_p * p_before @ ngram.bigram
-							else:
-								self.p_next[direction] += answer_p * p_before @ ngram.trigram @ p_after
+							self.p_next[direction] += answer_p * marginalize_trigram_smoothed(*surrounding)
 						else:
 							self.p_next[direction, answer[index]] += answer_p
 					self.p_next[direction] /= self.p_next[direction].sum()
 
 
 class Entry(object):
+	@property
+	def p_cells(self) -> np.ndarray: # (cell, letter_dist)
+		# probability
+		# shared memory going in the crossed direction
+		return self.board.p_cells[self.slice + (1 - self.direction,)] # type: ignore # forward reference
+
 	def __init__(self, board: 'Board', start: Tuple[int, int], direction: Direction):
 		# board
 		self.board = board
@@ -192,7 +237,7 @@ class Entry(object):
 		cell = self.board.grid[start]
 		while cell is not None and cell.is_cell:
 			cell.set_entry(self)
-			if direction == Direction.DOWN:
+			if self.direction == Direction.DOWN:
 				if cell.bar_below:
 					cell = None
 				else:
@@ -204,15 +249,12 @@ class Entry(object):
 					cell = cell.right
 			self.length += 1
 
-		if direction == Direction.DOWN:
+		if self.direction == Direction.DOWN:
 			self.slice = (slice(start_y, start_y + self.length), start_x) # type: Union[Tuple[int, slice], Tuple[slice, int]]
 		else:
 			self.slice = (start_y, slice(start_x, start_x + self.length))
 		self.cells = self.board.grid[self.slice]
 
-		# probability
-		# shared memory going in the crossed direction
-		self.p_cells = self.board.p_cells[self.slice + (1 - self.direction,)]
 		self.set_answers([None], [1])
 
 	def __len__(self):
@@ -232,16 +274,21 @@ class Entry(object):
 		for i, answer in enumerate(self.answers):
 			if answer is None:
 				# TODO: trigrams?
-				if len(self.p_cells) == 1:
-					self.p[i] *= ngram.unigram @ self.p_cells[0]
-				elif len(self.p_cells) > 1:
-					self.p[i] *= (ngram.bigram @ self.p_cells[1] @ self.p_cells[0]) ** (1 / 2)
-					self.p[i] *= (ngram.bigram @ self.p_cells[-1] @ self.p_cells[-2]) ** (1 / 2)
-					for j in range(len(self.p_cells) - 2):
-						self.p[i] *= (ngram.trigram @ self.p_cells[j+2] @ self.p_cells[j+1] @ self.p_cells[j]) ** (1 / 3)
+				# self.p[i] *= np.prod(self.p_cells @ ngram.unigram)
+				self.p[i] *= np.prod(self.p_cells @ ngram.uniform)
+				# if len(self.p_cells) == 1:
+					# self.p[i] *= ngram.unigram @ self.p_cells[0]
+				# elif len(self.p_cells) > 1:
+					# self.p[i] *= (ngram.bigram @ self.p_cells[1] @ self.p_cells[0]) ** (1 / 2)
+					# self.p[i] *= (ngram.bigram @ self.p_cells[-1] @ self.p_cells[-2]) ** (1 / 2)
+					# for j in range(len(self.p_cells) - 2):
+						# self.p[i] *= (ngram.trigram @ self.p_cells[j+2] @ self.p_cells[j+1] @ self.p_cells[j]) ** (1 / 3)
 			else:
 				self.p[i] *= np.prod(np.choose(answer, self.p_cells.T))
 		self.p /= self.p.sum()
+		# if self.direction == Direction.ACROSS and self.number == 4:
+			# print([None if answer is None else to_str(answer) for answer in self.answers])
+			# print(self.p)
 
 
 class Board(object):
@@ -353,7 +400,8 @@ class Board(object):
 		for row in self.grid:
 			for square in row:
 				square.update_p()
-		self.p_cells, self.p_cells_next = self.p_cells_next, self.p_cells
+		# self.p_cells, self.p_cells_next = self.p_cells_next, self.p_cells
+		self.p_cells = np.average((self.p_cells, self.p_cells_next), axis=0)
 
 	def update_entries(self) -> None:
 		for entries in self.entries:

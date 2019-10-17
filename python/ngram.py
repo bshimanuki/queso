@@ -16,12 +16,17 @@ class NGram(object):
         if fname:
             data = np.load(fname)
             self._unigram_counts = data['unigram_counts'].astype(np.float)
+            assert self._unigram_counts.shape == (self.n,)
             self._bigram_counts = data['bigram_counts'].astype(np.float)
+            assert self._bigram_counts.shape == (self.n, self.n)
             self._trigram_counts = data['trigram_counts'].astype(np.float)
+            assert self._trigram_counts.shape == (self.n, self.n, self.n)
         else:
             self._unigram_counts = np.ones((self.n,), dtype=np.float)
             self._bigram_counts = np.ones((self.n,)*2, dtype=np.float)
             self._trigram_counts = np.ones((self.n,)*3, dtype=np.float)
+        self.uniform = np.ones_like(self._unigram_counts)
+        self.uniform /= self.uniform.sum()
 
     def _compute(self, smooth=0.2) -> None:
         # TODO: compute frequencies
@@ -29,6 +34,8 @@ class NGram(object):
         self._bigram = self._bigram_counts / self._bigram_counts.sum()
         self._trigram = self._trigram_counts / self._trigram_counts.sum()
 
+        self._unigram = smooth * self.uniform + (1 - smooth) * self._unigram
+        self._unigram /= self._unigram.sum()
         self._bigram = smooth * np.outer(self._unigram, self._unigram) + (1 - smooth) * self._bigram
         self._bigram /= self._bigram.sum()
         self._trigram = smooth * np.einsum('ij,j,jk->ijk', self._bigram, 1 / self._unigram, self._bigram) + (1 - smooth) * self._trigram
