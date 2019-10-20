@@ -39,7 +39,14 @@ if __name__ == '__main__':
     clues_file = os.path.join(root, 'smogon-clues.txt')
     with open(clues_file) as f:
         clues = f.read()
-    board.use_clues(clues, weight_for_unknown=10)
+    entries_file = os.path.join(root, 'smogon-entries.txt')
+    if os.path.exists(entries_file):
+        with open(entries_file) as f:
+            board.load_entries(f.read(), weight_for_unknown=0)
+    else:
+        board.use_clues(clues, weight_for_unknown=10)
+        with open(entries_file, 'w') as f:
+            f.write(board.dump_entries())
 
     for i in range(30):
         board.update_cells()

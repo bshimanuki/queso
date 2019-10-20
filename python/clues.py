@@ -7,8 +7,7 @@ import urllib.parse
 import warnings
 
 import aiohttp
-from typing import cast, Any, Awaitable, Dict, Optional
-from typing_extensions import Literal
+from typing import cast, Any, Awaitable, Dict, Optional, Union
 
 '''
 Scoring ported from crows project at https://github.com/kcaze/crows.
@@ -42,7 +41,7 @@ class AsyncNoop(object):
 
 
 class TrackerBase(object):
-	method = None # type: Optional[Union[Literal['get'], Literal['post']]]
+	method = None # type: Optional[str]
 	num_tries = 3
 	semaphore = AsyncNoop() # type: Union[AsyncNoop, asyncio.Semaphore]
 

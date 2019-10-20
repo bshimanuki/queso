@@ -1,4 +1,5 @@
 import asyncio
+from collections import defaultdict
 import enum
 import functools
 import math
@@ -232,6 +233,7 @@ class Entry(object):
 		self.number = self.board.grid[start].number
 		self.direction = direction
 		self.length = 0
+		self.clue = None # type: Optional[str]
 
 		cell = self.board.grid[start]
 		while cell is not None and cell.is_cell:
@@ -262,17 +264,25 @@ class Entry(object):
 		# shared memory going in the crossed direction
 		return self.board.p_cells[self.slice + (1 - self.direction,)] # type: ignore # forward reference
 
+	@property
+	def name(self) -> str:
+		return '{}-{}'.format(self.number, self.direction.name)
+
 	def __len__(self):
 		return self.length
 
 	def __lt__(self, other):
 		return self.number < other.number
 
-	def set_answers(self, answers: Sequence[Optional[str]], scores: Sequence[float]) -> None:
+	def set_answers(self, answers: Sequence[Optional[str]], scores: Sequence[float], clue=Optional[str]) -> None:
 		'''Initialize possible answer probabilities. None is used for unknown.'''
 		assert len(answers) == len(scores)
+		# sort by score descending then answer alphabetical
+		answers, scores = zip(*sorted(zip(answers, scores), key=lambda pair: (-pair[1], pair[0])))
 		for answer in answers:
 			assert answer is None or len(answer) == len(self) and answer == answerize(answer)
+		if clue is not None:
+			self.clue = clue
 		self.answers = [to_uint(answer) if answer is not None else None for answer in answers]
 		self.scores = np.asarray(scores, dtype=np.float)
 		self.p = self.scores / self.scores.sum()
@@ -289,6 +299,7 @@ class Entry(object):
 				answers.append(answer)
 				weights.append(weight)
 		self.set_answers(answers, weights)
+		self.clue = clue
 
 	def update_p(self) -> None:
 		self.p[...] = self.scores
@@ -414,6 +425,51 @@ class Board(object):
 			strings.append('</tbody></table>')
 		return ''.join(strings)
 
+	def dump_entries(self, dump_clues=True, dump_scores=True) -> str:
+		'''Dump the list of possible answers for each entry.'''
+		lines = []
+		for entries in self.entries:
+			for entry in entries:
+				line = '{}:'.format(entry.name)
+				if dump_clues and entry.clue is not None:
+					line += ' ' + entry.clue
+				lines.append(line)
+				for answer, score in zip(entry.answers, entry.scores):
+					if answer is not None:
+						line = to_str(answer)
+						if dump_scores:
+							line += ' ' + str(score)
+						lines.append(line)
+		return '\n'.join(lines)
+
+	def load_entries(self, data : str, weight_for_unknown : float) -> None:
+		entry_answers = defaultdict(list) # type: Dict[str, List[Tuple[str, float]]]
+		entry_name = None # type: Optional[str]
+		clues = {} # type: Dict[str, Optional[str]]
+		for line in data.split('\n'):
+			if ':' in line:
+				entry_name, clue = line.split(':')
+				clue = clue.strip()
+				clues[entry_name] = clue if clue else None
+			else:
+				assert entry_name is not None
+				tokens = line.split()
+				answer = tokens[0]
+				score = float(tokens[1]) if len(tokens) > 1 else 1
+				entry_answers[entry_name].append((answer, score))
+		for entries in self.entries:
+			for entry in entries:
+				if entry.name not in entry_answers:
+					raise ValueError('{} not in loaded data'.format(entry.name))
+		for entries in self.entries:
+			for entry in entries:
+				answers, scores = zip(*entry_answers[entry.name]) # type: Sequence, Sequence
+				# TODO: standardize None order
+				answers = [None] + list(answers)
+				scores = [weight_for_unknown] + list(scores)
+				entry.set_answers(answers, scores, clue=clue)
+
+
 	def update_cells(self) -> None:
 		for row in self.grid:
 			for square in row:
@@ -476,9 +532,10 @@ class Board(object):
 			if tuple(map(len, clues_lists)) == tuple(map(len, self.entries)):
 				return clues_lists
 			else:
+				assert last_entry is not None
 				missing_entries[direction_order] = last_entry
 
-		missing = ('last{}: {}-{}'.format(tuple(direction.name for direction in direction_order), entry.number, entry.direction.name) for direction_order, entry in missing_entries.items())
+		missing = ('last{}: {}'.format(tuple(direction.name for direction in direction_order), entry.name) for direction_order, entry in missing_entries.items())
 		raise ValueError('could not find all clues: {}'.format(' '.join(missing)))
 
 	def use_clues(self, clues : str, weight_for_unknown : float, session : Optional[aiohttp.ClientSession] = None) -> None:
