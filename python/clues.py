@@ -1,4 +1,5 @@
 import asyncio
+from collections import defaultdict
 import enum
 import functools
 import re
@@ -20,6 +21,7 @@ def urlformat(text : str, dash=False) -> str:
 
 
 async def gather_resolve_dict(d : Dict[Any, Awaitable[Any]]) -> Dict[Any, Any]:
+	'''Resolves futures in dict values. Mutates the dict.'''
 	for key, value in d.items():
 		d[key] = asyncio.ensure_future(value)
 	d_future = cast(Dict[Any, 'asyncio.Future[Any]'], d)
@@ -36,12 +38,22 @@ class Tracker(enum.Enum):
 		return self.value(*args, **kwargs)
 
 	@classmethod
-	async def get_trackers(cls, clue : str, session : aiohttp.ClientSession) -> Dict[str, Dict[str, float]]:
+	async def get_scores_by_tracker(cls, clue : str, session : aiohttp.ClientSession) -> Dict[str, Dict[str, float]]:
 		scores = {
 			tracker.name: tracker(clue, session)
 			for tracker in cls
 		}
-		scores = await gather_resolve_dict(scores)
+		tracker_scores = await gather_resolve_dict(scores)
+		return tracker_scores
+
+	@classmethod
+	async def get_scores(cls, clue : str, session : aiohttp.ClientSession) -> Dict[str, float]:
+		'''Aggregate trackers and reduce by max.'''
+		tracker_scores = await cls.get_scores_by_tracker(clue, session)
+		scores = defaultdict(float) # type: Dict[str, float]
+		for _scores in tracker_scores.values():
+			for key, value in _scores.items():
+				scores[key] = max(scores[key], value)
 		return scores
 
 
@@ -124,9 +136,14 @@ if __name__ == '__main__':
 	}
 	session = aiohttp.ClientSession(headers=headers)
 	clue = 'batman sidekick'
-	queries = Tracker.get_trackers(clue, session)
+	# queries = Tracker.get_scores(clue, session)
+	# queries2 = Tracker.get_scores('second clue', session)
+	q = []
+	for i in range(10):
+		q.append(Tracker.get_scores_by_tracker('batman sidekick', session))
+	all_tasks = asyncio.gather(*q)
 	loop = asyncio.get_event_loop()
-	answer_scores = loop.run_until_complete(queries)
+	answer_scores = loop.run_until_complete(all_tasks)
 	loop.run_until_complete(session.close())
 	loop.close()
 	print(answer_scores)

@@ -1,11 +1,15 @@
+import asyncio
 import enum
 import functools
 import math
+import re
 
+import aiohttp
 import numpy as np
 import skimage
-from typing import cast, List, Optional, Sequence, Tuple, Union
+from typing import cast, Dict, List, Optional, Sequence, Tuple, Union
 
+from clues import Tracker
 from ngram import ngram
 
 '''
@@ -86,7 +90,7 @@ def marginalize_trigram_smoothed(
 	before = marginalize_trigram(prepre, pre, None, None)
 	mid = marginalize_trigram(None, pre, post, None)
 	after = marginalize_trigram(None, None, post, postpost)
-	ret =  (before * mid * after) ** (1 / 3)
+	ret =  (before * mid**2 * after) ** (1 / 4)
 	return ret
 
 
@@ -218,13 +222,8 @@ class Square(object):
 					self.p_next[direction] /= self.p_next[direction].sum()
 
 
+@functools.total_ordering
 class Entry(object):
-	@property
-	def p_cells(self) -> np.ndarray: # (cell, letter_dist)
-		# probability
-		# shared memory going in the crossed direction
-		return self.board.p_cells[self.slice + (1 - self.direction,)] # type: ignore # forward reference
-
 	def __init__(self, board: 'Board', start: Tuple[int, int], direction: Direction):
 		# board
 		self.board = board
@@ -257,8 +256,17 @@ class Entry(object):
 
 		self.set_answers([None], [1])
 
+	@property
+	def p_cells(self) -> np.ndarray: # (cell, letter_dist)
+		# probability
+		# shared memory going in the crossed direction
+		return self.board.p_cells[self.slice + (1 - self.direction,)] # type: ignore # forward reference
+
 	def __len__(self):
 		return self.length
+
+	def __lt__(self, other):
+		return self.number < other.number
 
 	def set_answers(self, answers: Sequence[Optional[str]], scores: Sequence[float]) -> None:
 		'''Initialize possible answer probabilities. None is used for unknown.'''
@@ -269,11 +277,23 @@ class Entry(object):
 		self.scores = np.asarray(scores, dtype=np.float)
 		self.p = self.scores / self.scores.sum()
 
+	async def use_clue(self, clue : str, session : aiohttp.ClientSession, weight_for_unknown : float) -> None:
+		answer_scores = await Tracker.get_scores(clue, session)
+		answers = [None] # type: List[Optional[str]]
+		weights = [weight_for_unknown]
+		for answer, score in answer_scores.items():
+			# TODO: weight function, partial answer, rebus
+			answer = answerize(answer)
+			weight = score + 1
+			if len(answer) == len(self):
+				answers.append(answer)
+				weights.append(weight)
+		self.set_answers(answers, weights)
+
 	def update_p(self) -> None:
 		self.p[...] = self.scores
 		for i, answer in enumerate(self.answers):
 			if answer is None:
-				# TODO: trigrams?
 				# self.p[i] *= np.prod(self.p_cells @ ngram.unigram)
 				self.p[i] *= np.prod(self.p_cells @ ngram.uniform)
 				# if len(self.p_cells) == 1:
@@ -286,9 +306,6 @@ class Entry(object):
 			else:
 				self.p[i] *= np.prod(np.choose(answer, self.p_cells.T))
 		self.p /= self.p.sum()
-		# if self.direction == Direction.ACROSS and self.number == 4:
-			# print([None if answer is None else to_str(answer) for answer in self.answers])
-			# print(self.p)
 
 
 class Board(object):
@@ -376,6 +393,7 @@ class Board(object):
 					if y == 0 or not self.grid[y-1, x].is_cell or self.grid[y-1, x].bar_below:
 						entry = Entry(self, (y, x), Direction.DOWN)
 						self.entries[Direction.DOWN].append(entry)
+		self.entries[Direction.DOWN] = sorted(self.entries[Direction.DOWN])
 
 	def format(self, **kwargs) -> str:
 		output = kwargs.get('output', 'html')
@@ -407,3 +425,77 @@ class Board(object):
 		for entries in self.entries:
 			for entry in entries:
 				entry.update_p()
+
+	def parse_clues(self, clues : str) -> List[List[str]]:
+		assert min(map(len, self.entries)) > 0
+		lines = clues.split('\n')
+		missing_entries = {} # type: Dict[Tuple[Direction, ...], Entry]
+		for direction_order in (tuple(Direction), tuple(reversed(tuple(Direction)))):
+			clues_lists = [[], []] # type: List[List[str]]
+
+			direction_iter = iter(direction_order)
+			direction = None # type: Optional[Direction]
+			next_direction = next(direction_iter) # type: Optional[Direction]
+			next_direction_first = cast(Direction, next_direction)
+			next_entry = self.entries[next_direction_first][0] # type: Optional[Entry]
+			last_entry = None # type: Optional[Entry]
+			for line in lines:
+				line = line.strip()
+				if not line:
+					continue
+				if next_direction is not None and next_direction != direction:
+					# eat empty lines and DOWN/ACROSS section
+					if line.upper() == next_direction.name:
+						direction = next_direction
+						continue
+				if next_direction is None:
+					next_entry = None
+				else:
+					next_entry = self.entries[next_direction][len(clues_lists[next_direction])]
+				if next_entry is not None:
+					assert next_direction is not None
+					match = re.match(r'(\d+)[\s\.:]*\s+(.*)', line)
+					if match:
+						number_str, clue = match.groups()
+						number = int(number_str)
+						if number == next_entry.number:
+							# start next clue
+							direction = next_direction
+							last_entry = self.entries[direction][len(clues_lists[direction])]
+							clues_lists[direction].append(clue)
+							if len(clues_lists[next_direction]) == len(self.entries[next_direction]):
+								try:
+									next_direction = next(direction_iter)
+								except StopIteration:
+									next_direction = None
+							continue
+				# next clue identifier not found, continue previous clue
+				if direction is not None and clues_lists[direction]:
+					clues_lists[direction][-1] += ' ' + line
+			# return the clues if we found them, otherwise indicate what we didn't find
+			if tuple(map(len, clues_lists)) == tuple(map(len, self.entries)):
+				return clues_lists
+			else:
+				missing_entries[direction_order] = last_entry
+
+		missing = ('last{}: {}-{}'.format(tuple(direction.name for direction in direction_order), entry.number, entry.direction.name) for direction_order, entry in missing_entries.items())
+		raise ValueError('could not find all clues: {}'.format(' '.join(missing)))
+
+	def use_clues(self, clues : str, weight_for_unknown : float, session : Optional[aiohttp.ClientSession] = None) -> None:
+		owns_session = session is None
+		clues_lists = self.parse_clues(clues)
+		if owns_session:
+			headers = {
+				'User-Agent': 'queso',
+			}
+			session = aiohttp.ClientSession(headers=headers)
+		assert session is not None
+		tasks = []
+		for entries, clues_list in zip(self.entries, clues_lists):
+			for entry, clue in zip(entries, clues_list):
+				tasks.append(entry.use_clue(clue, session, weight_for_unknown))
+		loop = asyncio.get_event_loop()
+		answer_scores = loop.run_until_complete(asyncio.gather(*tasks))
+		if owns_session:
+			loop.run_until_complete(session.close())
+		loop.close()
