@@ -278,7 +278,7 @@ class Entry(object):
 		self.p = self.scores / self.scores.sum()
 
 	async def use_clue(self, clue : str, session : aiohttp.ClientSession, weight_for_unknown : float) -> None:
-		answer_scores = await Tracker.get_scores(clue, session)
+		answer_scores = await Tracker.aggregate_scores(clue, session)
 		answers = [None] # type: List[Optional[str]]
 		weights = [weight_for_unknown]
 		for answer, score in answer_scores.items():
@@ -482,13 +482,18 @@ class Board(object):
 		raise ValueError('could not find all clues: {}'.format(' '.join(missing)))
 
 	def use_clues(self, clues : str, weight_for_unknown : float, session : Optional[aiohttp.ClientSession] = None) -> None:
+		print('Fetching clue answers...')
 		owns_session = session is None
 		clues_lists = self.parse_clues(clues)
 		if owns_session:
 			headers = {
 				'User-Agent': 'queso',
 			}
-			session = aiohttp.ClientSession(headers=headers)
+			connector = aiohttp.TCPConnector(
+				limit=100, # defualt is 100 simultaneous connections
+				limit_per_host=50,
+			)
+			session = aiohttp.ClientSession(headers=headers, connector=connector)
 		assert session is not None
 		tasks = []
 		for entries, clues_list in zip(self.entries, clues_lists):
@@ -499,3 +504,4 @@ class Board(object):
 		if owns_session:
 			loop.run_until_complete(session.close())
 		loop.close()
+		print('Fetched clue answers!')
