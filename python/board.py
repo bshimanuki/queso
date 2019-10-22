@@ -4,28 +4,19 @@ import enum
 import functools
 import math
 import re
+from typing import cast, Dict, List, Optional, Sequence, Tuple, Union
 
 import aiohttp
 import numpy as np
 import skimage
-from typing import cast, Dict, List, Optional, Sequence, Tuple, Union
 
 from clues import Tracker
 from ngram import ngram
+from utils import answerize, to_str, to_uint
 
 '''
 Represent a crossword board and fill it in with belief propagagrion using a markov random field model.
 '''
-
-
-def answerize(answer: str) -> str:
-	return ''.join(c for c in answer.upper() if c.isalpha())
-def to_uint(answer: str) -> np.ndarray:
-	ret = np.fromstring(answer, dtype=np.uint8) - ord('A')
-	return ret
-def to_str(answer: np.ndarray) -> str:
-	ret = (answer + ord('A')).tostring().decode('ascii')
-	return ret
 
 
 class Direction(enum.IntEnum):
@@ -288,7 +279,7 @@ class Entry(object):
 		self.p = self.scores / self.scores.sum()
 
 	async def use_clue(self, clue : str, session : aiohttp.ClientSession, weight_for_unknown : float) -> None:
-		answer_scores = await Tracker.aggregate_scores(clue, session)
+		answer_scores = await Tracker.aggregate_scores(clue, session, length_guess=len(self))
 		answers = [None] # type: List[Optional[str]]
 		weights = [weight_for_unknown]
 		for answer, score in answer_scores.items():
@@ -544,7 +535,7 @@ class Board(object):
 		clues_lists = self.parse_clues(clues)
 		if owns_session:
 			headers = {
-				'User-Agent': 'queso',
+				'User-Agent': 'queso AppleWebKit/9000 Chrome/9000',
 			}
 			connector = aiohttp.TCPConnector(
 				limit=100, # defualt is 100 simultaneous connections

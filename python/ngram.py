@@ -1,10 +1,11 @@
 import argparse
 import functools
 import os
-import unicodedata
+from typing import Optional
 
 import numpy as np
-from typing import Optional
+
+from utils import normalize_unicode
 
 class NGram(object):
     def __init__(self, fname : Optional[str]):
@@ -75,7 +76,7 @@ def make_data(wordlist_file : str):
         for line in f:
             answers = line.split('\t')[0]
             for answer in answers.split('/'):
-                answer = unicodedata.normalize('NFD', answer)
+                answer = normalize_unicode('NFD', answer)
                 if not answer.isalpha():
                     continue
                 values = to_uint(answer)

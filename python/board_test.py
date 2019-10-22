@@ -3,10 +3,10 @@ import functools
 import operator
 import os
 import sys
+from typing import DefaultDict, List, Optional
 
 import imageio
 import numpy as np
-from typing import DefaultDict, List, Optional
 
 from board import Board
 from board_extract import make_board
@@ -40,13 +40,14 @@ if __name__ == '__main__':
     with open(clues_file) as f:
         clues = f.read()
     entries_file = os.path.join(root, 'smogon-entries.txt')
-    if os.path.exists(entries_file):
-        with open(entries_file) as f:
-            board.load_entries(f.read(), weight_for_unknown=0)
-    else:
-        board.use_clues(clues, weight_for_unknown=10)
-        with open(entries_file, 'w') as f:
-            f.write(board.dump_entries())
+    # if os.path.exists(entries_file):
+        # with open(entries_file) as f:
+            # board.load_entries(f.read(), weight_for_unknown=0)
+    # else:
+        # board.use_clues(clues, weight_for_unknown=10)
+        # with open(entries_file, 'w') as f:
+            # f.write(board.dump_entries())
+    board.use_clues(clues, weight_for_unknown=10)
 
     for i in range(30):
         board.update_cells()
