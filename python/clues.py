@@ -87,9 +87,10 @@ class TrackerBase(abc.ABC):
 		Return the html of the requested resource. Caches the result.
 		'''
 		assert self.method in ('get', 'post')
-		url = self.url()
+		doc = None
 		for _trial in range(self.num_trials):
 			self.trial = _trial
+			url = self.url()
 			if self.method == 'get':
 				task_maker = lambda: self.session.get(url)
 				cache_key = self.slugify('-'.join((self.method, url)))
@@ -124,6 +125,7 @@ class TrackerBase(abc.ABC):
 					with open(cache_file, 'wb') as f:
 						f.write(doc.encode('utf-8'))
 			return doc
+		# could not get resource
 		warnings.warn('Failed connection to {} after {} tries... skipping'.format(self.__class__.__name__, self.num_trials))
 		return ''
 
@@ -175,6 +177,7 @@ class Tracker(enum.Enum):
 		'''
 		method = 'get'
 		num_trials = 4 # try each site twice
+		min_valid_html_length = 20000 # server outage is about 15k, valid response is about 150k
 		sites = [
 			('https://www.wordplays.com/crossword-solver/{}', asyncio.Semaphore(12)),
 			('http://www.acrossndown.com/crosswords/clues/{}', asyncio.Semaphore(12)),

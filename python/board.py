@@ -501,7 +501,7 @@ class Board(object):
 					next_entry = self.entries[next_direction][len(clues_lists[next_direction])]
 				if next_entry is not None:
 					assert next_direction is not None
-					match = re.match(r'(\d+)[\s\.:]*\s+(.*)', line)
+					match = re.match(r'(\d+)\b[\s\.:]*(.*)', line)
 					if match:
 						number_str, clue = match.groups()
 						number = int(number_str)

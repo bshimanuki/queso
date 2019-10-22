@@ -103,14 +103,19 @@ def get_square_size(im: np.ndarray) -> Tuple[float, float]:
 	bw = make_normalized_mono(im)
 	ac = autocorrelate(bw)
 	ac_mag = np.abs(ac)
+	# save_color('ac_mag.png', ac_mag)
 
+	smooth_pixels = 3
 	# use g as workspace to find peaks
 	g = np.array(ac_mag)
 	# remove zero frequencies
 	g_y = g.mean(axis=1)
+	g_x = g.mean(axis=0)
+	for i in range(smooth_pixels):
+		g_y = np.convolve(g_y, [1, 2, 1], mode='same')
+		g_x = np.convolve(g_x, [1, 2, 1], mode='same')
 	y_mid = g_y.size // 2
 	y_mid_slice = get_mountain_slice(g_y, y_mid)
-	g_x = g.mean(axis=0)
 	x_mid = g_x.size // 2
 	x_mid_slice = get_mountain_slice(g_x, x_mid)
 	g[y_mid_slice] = 0
