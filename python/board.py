@@ -3,8 +3,9 @@ from collections import defaultdict
 import enum
 import functools
 import math
+import operator
 import re
-from typing import cast, Dict, List, Optional, Sequence, Tuple, Union
+from typing import cast, Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import aiohttp
 import numpy as np
@@ -140,6 +141,7 @@ class Square(object):
 
 	def format(self, **kwargs) -> str:
 		output = kwargs.get('output', 'html')
+		display = kwargs.get('display', True)
 		fill = kwargs.get('fill', False)
 		number = kwargs.get('number', True)
 		probabilities = kwargs.get('probabilities', False)
@@ -148,26 +150,28 @@ class Square(object):
 		if output == 'html':
 			border_style = '2px solid #000000'
 			styles = []
-			styles.append('background-color:{};'.format(self.color.format(**kwargs)))
-			if self.up is None or self.up.bar_below:
-				styles.append('border-top:{};'.format(border_style))
-			if self.left is None or self.left.bar_right:
-				styles.append('border-left:{};'.format(border_style))
-			if self.down is None or self.bar_below:
-				styles.append('border-bottom:{};'.format(border_style))
-			if self.right is None or self.bar_right:
-				styles.append('border-right:{};'.format(border_style))
+			if display:
+				styles.append('background-color:{};'.format(self.color.format(**kwargs)))
+				if self.up is None or self.up.bar_below:
+					styles.append('border-top:{};'.format(border_style))
+				if self.left is None or self.left.bar_right:
+					styles.append('border-left:{};'.format(border_style))
+				if self.down is None or self.bar_below:
+					styles.append('border-bottom:{};'.format(border_style))
+				if self.right is None or self.bar_right:
+					styles.append('border-right:{};'.format(border_style))
 			style = ''.join(styles)
 			strings.append('<td style="{}">'.format(style))
-		if number and self.number is not None:
-			strings.append(str(self.number))
-		if self.is_cell:
-			if fill:
-				c, prob = self.get_contents(**kwargs)
-				strings.append(c)
-			elif probabilities and not number:
-				c, prob = self.get_contents(**kwargs)
-				strings.append(str(prob))
+		if display:
+			if number and self.number is not None:
+				strings.append(str(self.number))
+			if self.is_cell:
+				if fill:
+					c, prob = self.get_contents(**kwargs)
+					strings.append(c)
+				elif probabilities and not number:
+					c, prob = self.get_contents(**kwargs)
+					strings.append(str(prob))
 		if output == 'html':
 			strings.append('</td>')
 		elif output == 'plain':
@@ -398,20 +402,62 @@ class Board(object):
 		self.entries[Direction.DOWN] = sorted(self.entries[Direction.DOWN])
 
 	def format(self, **kwargs) -> str:
+		return self.format_multiple(board_args=(({},),), **kwargs)
+
+	def format_multiple(self, board_args : Optional[Iterable[Iterable[Optional[Dict[str, Any]]]]] = None, padding=2, **kwargs):
+		'''
+		board_args should be a 2d grid of keyword arguments to pass to squares or None for empty space.
+		padding is the number of width inserted between boards.
+		'''
 		output = kwargs.get('output', 'html')
 		assert output in ('plain', 'html')
+		if board_args is None:
+			board_args = (
+				(
+					{'fill': False, 'number': True, 'probabilities': False},
+					{'fill': True, 'number': False, 'probabilities': False},
+				),
+				(
+					{'fill': False, 'number': False, 'probabilities': True, 'reduce_op': operator.itemgetter(0)},
+					{'fill': False, 'number': False, 'probabilities': True, 'reduce_op': operator.itemgetter(1)},
+				),
+				(
+					{'fill': True, 'number': False, 'probabilities': False, 'reduce_op': operator.itemgetter(0)},
+					{'fill': True, 'number': False, 'probabilities': False, 'reduce_op': operator.itemgetter(1)},
+				),
+				(
+					{'fill': False, 'number': False, 'probabilities': True},
+					None,
+				),
+			)
 		strings = []
 		if output == 'html':
 			strings.append('<table><tbody>')
-		for row in self.grid:
-			if output == 'html':
-				strings.append('<tr>')
-			for square in row:
-				strings.append(square.format(**kwargs))
-			if output == 'html':
-				strings.append('</tr>')
-			elif output == 'plain':
-				strings.append('\n')
+		for board_y, row_board_args in enumerate(board_args):
+			if board_y != 0:
+				if output == 'html':
+					strings.append('<tr></tr>' * padding)
+				elif output == 'plain':
+					strings.append('\n' * padding)
+			for row in self.grid:
+				if output == 'html':
+					strings.append('<tr>')
+				for board_x, square_board_args in enumerate(row_board_args):
+					_kwargs = kwargs.copy()
+					if square_board_args is None:
+						_kwargs['display'] = False
+					else:
+						_kwargs.update(square_board_args)
+					if board_x != 0:
+						strings.append('<td></td>' * padding)
+					elif output == 'plain':
+						strings.append(' ' * padding)
+					for square in row:
+						strings.append(square.format(**_kwargs))
+				if output == 'html':
+					strings.append('</tr>')
+				elif output == 'plain':
+					strings.append('\n')
 		if output == 'html':
 			strings.append('</tbody></table>')
 		return ''.join(strings)

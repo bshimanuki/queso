@@ -15,12 +15,12 @@ from clipboard_qt import set_clipboard
 
 if __name__ == '__main__':
     root = os.path.dirname(os.path.dirname(__file__))
-    # impath = 'smogon.png'
-    # clues_file = os.path.join(root, 'smogon-clues.txt')
-    # entries_file = os.path.join(root, 'smogon-entries.txt')
-    impath = 'Oct2219.png'
-    clues_file = os.path.join(root, 'Oct2219-clues.txt')
-    entries_file = os.path.join(root, 'Oct2219-entries.txt')
+    impath = 'smogon.png'
+    clues_file = os.path.join(root, 'smogon-clues.txt')
+    entries_file = os.path.join(root, 'smogon-entries.txt')
+    # impath = 'Oct2219.png'
+    # clues_file = os.path.join(root, 'Oct2219-clues.txt')
+    # entries_file = os.path.join(root, 'Oct2219-entries.txt')
     im = imageio.imread(os.path.join(root, 'img_test', impath))
 
     board = make_board(im)
@@ -59,6 +59,7 @@ if __name__ == '__main__':
         board.update_entries()
     board.update_cells()
 
+    # output = board.format_multiple()
     output = board.format(fill=True, number=False, probabilities=False)
     # output = board.format(fill=False, number=True, probabilities=False)
     # output = board.format(fill=True, number=False, probabilities=False, reduce_op=operator.itemgetter(1))
