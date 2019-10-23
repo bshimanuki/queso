@@ -1,5 +1,6 @@
 import asyncio
 from collections import defaultdict
+import copy
 import enum
 import functools
 import math
@@ -145,13 +146,28 @@ class Square(object):
 		fill = kwargs.get('fill', False)
 		number = kwargs.get('number', True)
 		probabilities = kwargs.get('probabilities', False)
+		cell_order = kwargs.get('cell_order', None)
+		num_cells = kwargs.get('num_cells', None)
+		color_probability = kwargs.get('color_probability', not number)
 		assert output in ('plain', 'html')
 		strings = []
 		if output == 'html':
 			border_style = '2px solid #000000'
 			styles = []
 			if display:
-				styles.append('background-color:{};'.format(self.color.format(**kwargs)))
+				if self.is_cell and color_probability and cell_order is not None:
+					assert num_cells is not None
+					v = cell_order[self.y, self.x]
+					percentile = v / (num_cells - 1) if num_cells > 1 else 0.5
+					white = np.array([1, 1, 1], dtype=np.float)
+					red = np.array([230, 124, 115], dtype=np.float) / 255
+					green = np.array([87, 187, 138], dtype=np.float) / 255
+					colors = np.stack((red, white, green))
+					rgb = np.array([np.interp(percentile, [0, 0.5, 1], _color) for _color in colors.T])
+					color = Color(rgb)
+				else:
+					color = self.color
+				styles.append('background-color:{};'.format(color.format(**kwargs)))
 				if self.up is None or self.up.bar_below:
 					styles.append('border-top:{};'.format(border_style))
 				if self.left is None or self.left.bar_right:
@@ -404,15 +420,15 @@ class Board(object):
 	def format(self, **kwargs) -> str:
 		return self.format_multiple(board_args=(({},),), **kwargs)
 
-	def format_multiple(self, board_args : Optional[Iterable[Iterable[Optional[Dict[str, Any]]]]] = None, padding=2, **kwargs):
+	def format_multiple(self, board_kwargs : Optional[Iterable[Iterable[Optional[Dict[str, Any]]]]] = None, padding=2, **kwargs):
 		'''
 		board_args should be a 2d grid of keyword arguments to pass to squares or None for empty space.
 		padding is the number of width inserted between boards.
 		'''
 		output = kwargs.get('output', 'html')
 		assert output in ('plain', 'html')
-		if board_args is None:
-			board_args = (
+		if board_kwargs is None:
+			board_kwargs = (
 				(
 					{'fill': False, 'number': True, 'probabilities': False},
 					{'fill': True, 'number': False, 'probabilities': False},
@@ -430,10 +446,32 @@ class Board(object):
 					None,
 				),
 			)
+		else:
+			board_kwargs = copy.deepcopy(board_kwargs)
+		for row_board_kwargs in board_kwargs:
+			for square_board_kwargs in row_board_kwargs:
+				if square_board_kwargs is not None:
+					for key, value in kwargs.items():
+						if key not in square_board_kwargs:
+							square_board_kwargs[key] = value
+					p_cells = np.array(
+						[
+							[
+								square.get_contents(**square_board_kwargs)[1] if square.is_cell else np.inf
+								for square in row
+							]
+							for row in self.grid
+						],
+						dtype=np.float)
+					sort_order_list = np.unravel_index(np.argsort(p_cells, axis=None), p_cells.shape)
+					sort_order = np.zeros_like(p_cells, dtype=np.int)
+					sort_order[sort_order_list] = np.arange(sort_order.size)
+					square_board_kwargs['cell_order'] = sort_order
+					square_board_kwargs['num_cells'] = self.cells.sum()
 		strings = []
 		if output == 'html':
 			strings.append('<table><tbody>')
-		for board_y, row_board_args in enumerate(board_args):
+		for board_y, row_board_kwargs in enumerate(board_kwargs):
 			if board_y != 0:
 				if output == 'html':
 					strings.append('<tr></tr>' * padding)
@@ -442,12 +480,8 @@ class Board(object):
 			for row in self.grid:
 				if output == 'html':
 					strings.append('<tr>')
-				for board_x, square_board_args in enumerate(row_board_args):
-					_kwargs = kwargs.copy()
-					if square_board_args is None:
-						_kwargs['display'] = False
-					else:
-						_kwargs.update(square_board_args)
+				for board_x, square_board_kwargs in enumerate(row_board_kwargs):
+					_kwargs = square_board_kwargs or {'display': False}
 					if board_x != 0:
 						strings.append('<td></td>' * padding)
 					elif output == 'plain':

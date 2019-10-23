@@ -76,7 +76,7 @@ def make_data(wordlist_file : str):
         for line in f:
             answers = line.split('\t')[0]
             for answer in answers.split('/'):
-                answer = normalize_unicode('NFD', answer)
+                answer = normalize_unicode(answer)
                 if not answer.isalpha():
                     continue
                 values = to_uint(answer)

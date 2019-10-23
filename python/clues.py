@@ -9,7 +9,7 @@ import itertools
 import random
 import re
 import os
-from typing import cast, Any, Awaitable, Dict, Iterable, Optional, Union
+from typing import cast, Any, Awaitable, Dict, Iterable, List, Optional, Union
 import urllib.parse
 import warnings
 
@@ -106,7 +106,7 @@ class TrackerBase(abc.ABC):
 					def dump(self):
 						return b''.join(self.bufs)
 				formdump = AsyncStreamWriter()
-				await formdata().write(formdump)
+				await formdata().write(formdump) # type: ignore # mock class
 				cache_key = self.slugify('-'.join((self.method, url, formdump.dump().decode('utf-8'))))
 			cache_file = os.path.join(CACHE_DIR, cache_key)
 			if os.path.isfile(cache_file):
@@ -135,7 +135,7 @@ class Tracker(enum.Enum):
 	async def get_scores_by_tracker(cls, clue : str, session : aiohttp.ClientSession, length_guess : int, trackers : Optional[Iterable['Tracker']] = None) -> Dict[str, Dict[str, float]]:
 		scores = {
 			tracker.name: tracker.value(clue, session, length_guess).get_scores()
-			for tracker in (cls if trackers is None else trackers)
+			for tracker in (cls if trackers is None else trackers) # type: ignore # mypy does not recognize enums
 		}
 		tracker_scores = await gather_resolve_dict(scores)
 		return tracker_scores
@@ -384,7 +384,7 @@ if __name__ == '__main__':
 	session = aiohttp.ClientSession(headers=headers)
 	clue = 'batman sidekick'
 	q = []
-	trackers = [Tracker.WORDPLAYS]
+	trackers = [Tracker.WORDPLAYS] # type: Optional[List[Any]] # mypy does not recognize enums
 	trackers = None
 	for i in range(1):
 		q.append(Tracker.get_scores_by_tracker(clue, session, 5, trackers=trackers))
