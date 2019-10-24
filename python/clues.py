@@ -90,8 +90,11 @@ class TrackerBase(abc.ABC):
 	num_trials = 3
 	min_valid_html_length = 1000 # for asserting we aren't getting error responses, valid responses seem to be at least 8k
 	semaphore = AsyncNoop() # type: Union[AsyncNoop, asyncio.Semaphore]
-	expected_answers = True
+	# fetch will set to True on fetched resource
 	site_gave_answers = False
+	# subclasses should override
+	expected_answers = True
+	should_run = True
 
 	def __init__(self, clue : str, session : aiohttp.ClientSession, length_guess : int, async_tqdm : Optional[tqdm.tqdm] = None):
 		self.clue = clue
@@ -138,6 +141,8 @@ class TrackerBase(abc.ABC):
 		try:
 			assert self.method in ('get', 'post')
 			doc = None
+			if not self.should_run:
+				return ''
 			for _trial in range(self.num_trials):
 				self.trial = _trial
 				url = self.url()
@@ -416,7 +421,14 @@ class Tracker(enum.Enum):
 				pass
 			return answer_scores
 
-	# TODO: class GOOGLE_FILL_IN_THE_BLANK(TrackerBase)
+	class GOOGLE_FILL_IN_THE_BLANK(GOOGLE):
+		regex_blank = re.compile(r'_+')
+		expected_answers = False
+		@property
+		def should_run(self):
+			return '_' in self.clue
+		def url(self) -> str:
+			return self.regex_blank.sub('*', super().url())
 
 
 if __name__ == '__main__':

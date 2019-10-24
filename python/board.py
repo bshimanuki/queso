@@ -420,11 +420,11 @@ class Board(object):
 		self.entries[Direction.DOWN] = sorted(self.entries[Direction.DOWN])
 
 	def format(self, **kwargs) -> str:
-		return self.format_multiple(board_args=(({},),), **kwargs)
+		return self.format_multiple(board_kwargs=(({},),), **kwargs)
 
 	def format_multiple(self, board_kwargs : Optional[Iterable[Iterable[Optional[Dict[str, Any]]]]] = None, padding=2, **kwargs):
 		'''
-		board_args should be a 2d grid of keyword arguments to pass to squares or None for empty space.
+		board_args should be a 2D grid of keyword arguments to pass to squares or None for empty space.
 		padding is the number of width inserted between boards.
 		'''
 		output = kwargs.get('output', 'html')
