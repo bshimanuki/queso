@@ -6,16 +6,18 @@ import functools
 import html
 import io
 import itertools
+import json
 import math
 import random
 import re
 import os
-from typing import cast, Any, Awaitable, Dict, Iterable, List, Optional, Union
+from typing import cast, Any, Awaitable, Counter as _Counter, Dict, Iterable, List, Optional, Union
 import urllib.parse
 import warnings
 
 import aiohttp
 import bs4
+import tqdm
 
 from utils import answerize, normalize_unicode
 
@@ -46,6 +48,42 @@ class AsyncNoop(object):
 	def __aexit__(self, exc_type, exc_value, traceback):
 		return self
 
+with open(os.path.join(ROOT, 'google_ignore.txt')) as f:
+	stopwords = set(line.strip() for line in f if line.strip() and not line.strip().startswith('#'))
+nonalpha_regex = re.compile(r'\W+')
+def get_text_ngrams(lines : List[str], values : Optional[Iterable[int]] = None) -> Dict[str, int]:
+	'''Count the number of unigrams and bigrams in a series of results.'''
+	counter = Counter() # type: _Counter[str]
+	if values is None:
+		values = (1 for line in lines)
+	for line, value in zip(lines, values):
+		line = html.unescape(line)
+		clusters = line.split()
+		word_unigrams = {}
+		word_bigrams = {}
+		for i, cluster in enumerate(clusters):
+			if cluster.endswith('\'s') or cluster.endswith('\'S'):
+				# do once with the s appended and once without
+				groups = (cluster[:-2], cluster[:-2] + 's') # type: Iterable[str]
+			else:
+				groups = (cluster,)
+			for group in groups:
+				words = nonalpha_regex.split(group)
+				for word in words:
+					word = answerize(word)
+					if word and word not in stopwords:
+						word_unigrams[word] = value
+			if i + 1 < len(clusters):
+				next_cluster = clusters[i + 1]
+				pre = answerize(cluster)
+				post = answerize(next_cluster)
+				# allow stopwords to be in phrase but not at the end
+				if pre and post and post not in stopwords:
+					word_bigrams[pre + post] = value
+		counter.update(word_unigrams)
+		counter.update(word_bigrams)
+	return counter
+
 
 class TrackerBase(abc.ABC):
 	method = None # type: Optional[str]
@@ -55,11 +93,12 @@ class TrackerBase(abc.ABC):
 	expected_answers = True
 	site_gave_answers = False
 
-	def __init__(self, clue : str, session : aiohttp.ClientSession, length_guess : int):
+	def __init__(self, clue : str, session : aiohttp.ClientSession, length_guess : int, async_tqdm : Optional[tqdm.tqdm] = None):
 		self.clue = clue
 		self.session = session
 		# some sites require a length
 		self.length_guess = length_guess
+		self.async_tqdm = async_tqdm
 		self.trial = 0
 
 	@abc.abstractmethod
@@ -67,10 +106,6 @@ class TrackerBase(abc.ABC):
 		raise NotImplementedError()
 
 	def formdata(self) -> aiohttp.FormData:
-		raise NotImplementedError()
-
-	@abc.abstractmethod
-	async def get_scores(self) -> Dict[str, float]:
 		raise NotImplementedError()
 
 	def url_clue(self, dash=False) -> str:
@@ -100,64 +135,68 @@ class TrackerBase(abc.ABC):
 		'''
 		Return the html of the requested resource. Caches the result.
 		'''
-		assert self.method in ('get', 'post')
-		doc = None
-		for _trial in range(self.num_trials):
-			self.trial = _trial
-			url = self.url()
-			if self.method == 'get':
-				task_maker = lambda: self.session.get(url)
-				cache_key = self.slugify('-'.join((self.method, url)))
-			else:
-				assert self.method == 'post'
-				formdata = self.formdata()
-				task_maker = lambda: self.session.post(url, data=formdata)
-				class AsyncStreamWriter():
-					def __init__(self):
-						self.bufs = []
-					async def write(self, s : bytes) -> None:
-						self.bufs.append(s)
-					def dump(self):
-						return b''.join(self.bufs)
-				formdump = AsyncStreamWriter()
-				await formdata().write(formdump) # type: ignore # mock class
-				cache_key = self.slugify('-'.join((self.method, url, formdump.dump().decode('utf-8'))))
-			cache_file = os.path.join(CACHE_DIR, cache_key)
-			if os.path.isfile(cache_file):
-				with open(cache_file, 'rb') as f:
-					doc = f.read().decode('utf-8')
-			else:
-				task = task_maker()
-				async with self.semaphore:
-					try:
-						async with task as response:
-							doc = await response.text()
-						assert(len(doc) >= self.min_valid_html_length)
-					except Exception as e:
-						continue
-					os.makedirs(CACHE_DIR, exist_ok=True)
-					with open(cache_file, 'wb') as f:
-						f.write(doc.encode('utf-8'))
-			return doc
-		# could not get resource
-		warnings.warn('Failed connection to {} after {} tries... skipping'.format(self.__class__.__name__, self.num_trials))
-		return ''
+		try:
+			assert self.method in ('get', 'post')
+			doc = None
+			for _trial in range(self.num_trials):
+				self.trial = _trial
+				url = self.url()
+				if self.method == 'get':
+					task_maker = lambda: self.session.get(url)
+					cache_key = self.slugify('-'.join((self.method, url)))
+				else:
+					assert self.method == 'post'
+					formdata = self.formdata()
+					task_maker = lambda: self.session.post(url, data=formdata)
+					class AsyncStreamWriter():
+						def __init__(self):
+							self.bufs = []
+						async def write(self, s : bytes) -> None:
+							self.bufs.append(s)
+						def dump(self):
+							return b''.join(self.bufs)
+					formdump = AsyncStreamWriter()
+					await formdata().write(formdump) # type: ignore # mock class
+					cache_key = self.slugify('-'.join((self.method, url, formdump.dump().decode('utf-8'))))
+				cache_file = os.path.join(CACHE_DIR, cache_key)
+				if os.path.isfile(cache_file):
+					with open(cache_file, 'rb') as f:
+						doc = f.read().decode('utf-8')
+				else:
+					task = task_maker()
+					async with self.semaphore:
+						try:
+							async with task as response:
+								doc = await response.text()
+							assert(len(doc) >= self.min_valid_html_length)
+						except Exception as e:
+							continue
+						os.makedirs(CACHE_DIR, exist_ok=True)
+						with open(cache_file, 'wb') as f:
+							f.write(doc.encode('utf-8'))
+				return doc
+			# could not get resource
+			warnings.warn('Failed connection to {} after {} tries... skipping'.format(self.__class__.__name__, self.num_trials))
+			return ''
+		finally:
+			if self.async_tqdm is not None:
+				self.async_tqdm.update()
 
 
 class Tracker(enum.Enum):
 	@classmethod
-	async def get_scores_by_tracker(cls, clue : str, session : aiohttp.ClientSession, length_guess : int, trackers : Optional[Iterable['Tracker']] = None) -> Dict[str, Dict[str, float]]:
+	async def get_scores_by_tracker(cls, clue : str, session : aiohttp.ClientSession, length_guess : int, trackers : Optional[Iterable['Tracker']] = None, async_tqdm : Optional[tqdm.tqdm] = None) -> Dict[str, Dict[str, float]]:
 		scores = {
-			tracker.name: tracker.value(clue, session, length_guess).get_scores()
+			tracker.name: tracker.value(clue, session, length_guess, async_tqdm=async_tqdm).get_scores()
 			for tracker in (cls if trackers is None else trackers) # type: ignore # mypy does not recognize enums
 		}
 		tracker_scores = await gather_resolve_dict(scores)
 		return tracker_scores
 
 	@classmethod
-	async def aggregate_scores(cls, clue : str, session : aiohttp.ClientSession, length_guess : int) -> Dict[str, float]:
+	async def aggregate_scores(cls, clue : str, session : aiohttp.ClientSession, length_guess : int, async_tqdm : Optional[tqdm.tqdm] = None) -> Dict[str, float]:
 		'''Aggregate trackers and reduce by sum.'''
-		tracker_scores = await cls.get_scores_by_tracker(clue, session, length_guess)
+		tracker_scores = await cls.get_scores_by_tracker(clue, session, length_guess, async_tqdm=async_tqdm)
 		scores = defaultdict(float) # type: Dict[str, float]
 		for _scores in tracker_scores.values():
 			for key, value in _scores.items():
@@ -206,8 +245,8 @@ class Tracker(enum.Enum):
 		@property
 		def index(self):
 			return (self.trial + self.trial_offset) % len(self.sites)
-		def __init__(self, clue : str, session : aiohttp.ClientSession, length_guess : int):
-			super().__init__(clue, session, length_guess)
+		def __init__(self, clue : str, session : aiohttp.ClientSession, length_guess : int, async_tqdm : Optional[tqdm.tqdm] = None):
+			super().__init__(clue, session, length_guess, async_tqdm=async_tqdm)
 			self.trial_offset = random.randrange(len(self.sites))
 		def url(self) -> str:
 			site = self.sites[self.index][0]
@@ -304,45 +343,12 @@ class Tracker(enum.Enum):
 		wikipeidia_regex = re.compile(r'>([^<]*) - Wikipedia<')
 		header_regex = re.compile(r'<h3[^>]*>([^<]*)</h3>')
 		snippet_regex = re.compile(r'<span [^>]*class="st"[^>]*>\s*(?:<span [^>]*class="f"[^>]*>[^<]*</span>)?\s*(.*?)</span>')
-		nonalpha_regex = re.compile(r'\W+')
-		with open(os.path.join(ROOT, 'google_ignore.txt')) as f:
-			stopwords = set(line.strip() for line in f if line.strip() and not line.strip().startswith('#'))
 		def url(self) -> str:
 			return 'https://www.google.com/search?q={}'.format(self.url_clue())
 		async def _get_scores(self, doc : str) -> Dict[str, float]:
 			# remove bold tags
 			doc = doc.replace('<em>', '').replace('</em>', '')
 			doc = doc.replace('<b>', '').replace('</b>', '')
-
-			def get_text_ngrams(lines):
-				counter = Counter()
-				for line in lines:
-					line = html.unescape(line)
-					clusters = line.split()
-					word_unigrams = set()
-					word_bigrams = set()
-					for i, cluster in enumerate(clusters):
-						if cluster.endswith('\'s') or cluster.endswith('\'S'):
-							# do once with the s appended and once without
-							groups = (cluster[:-2], cluster[:-2] + 's')
-						else:
-							groups = (cluster,)
-						for group in groups:
-							words = self.nonalpha_regex.split(group)
-							for word in words:
-								word = answerize(word)
-								if word and word not in self.stopwords:
-									word_unigrams.add(word)
-						if i + 1 < len(clusters):
-							next_cluster = clusters[i + 1]
-							pre = answerize(cluster)
-							post = answerize(next_cluster)
-							# allow stopwords to be in phrase but not at the end
-							if pre and post and post not in self.stopwords:
-								word_bigrams.add(pre + post)
-					counter.update(word_unigrams)
-					counter.update(word_bigrams)
-				return counter
 
 			wiki_scores = {} # type: Dict[str, float]
 			wiki_matches = self.wikipeidia_regex.findall(doc)
@@ -380,11 +386,37 @@ class Tracker(enum.Enum):
 					answer_scores[answer] = soup_scores[answer]
 			return answer_scores
 
-		# TODO: class GOOGLE_CROSSWORD_CLUE(TrackerBase)
+	# TODO: class GOOGLE_CROSSWORD_CLUE(TrackerBase)
 
-		# TODO: class GOOGLE_COMPLETION(TrackerBase)
+	class GOOGLE_COMPLETION(TrackerBase):
+		method = 'get'
+		semaphore = asyncio.Semaphore(15)
+		regex_word = re.compile(r'[A-Za-z]+')
+		min_valid_html_length = 100 # json responses are short, especially when empty
+		def url(self) -> str:
+			return 'http://suggestqueries.google.com/complete/search?client=chrome&q={}'.format(self.url_clue())
+		async def _get_scores(self, doc : str) -> Dict[str, float]:
+			answer_scores = {} # Dict[str, float]
+			completions = []
+			try:
+				query, results, _, _, extra = json.loads(doc) # type: ignore # mypy does not handle underscore # str, List[str], Any, Any, Dict[str, Any]
+				results_relevance = extra['google:suggestrelevance'] # values in the hundreds and thousands
+				query_relevance = extra['google:verbatimrelevance'] # values in the hundreds and thousands
+				query = normalize_unicode(query).lower()
+				query_words = self.regex_word.findall(query)
+				for result in results:
+					result = normalize_unicode(result).lower()
+					for word  in query_words:
+						result = result.replace(word, '', 1)
+					completions.append(result)
+				completions_counter = get_text_ngrams(completions, values=results_relevance)
+				for answer, count in completions_counter.items():
+					answer_scores[answer] = max(1, math.log2(count / 100))
+			except:
+				pass
+			return answer_scores
 
-		# TODO: class GOOGLE_FILL_IN_THE_BLANK(TrackerBase)
+	# TODO: class GOOGLE_FILL_IN_THE_BLANK(TrackerBase)
 
 
 if __name__ == '__main__':

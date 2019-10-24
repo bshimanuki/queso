@@ -5,4 +5,5 @@ imageio
 numpy
 scipy
 scikit-image
+tqdm
 opencv-python

@@ -12,6 +12,7 @@ import warnings
 import aiohttp
 import numpy as np
 import skimage
+import tqdm
 
 from clues import Tracker
 from ngram import ngram
@@ -299,8 +300,8 @@ class Entry(object):
 		self.scores = np.asarray(scores, dtype=np.float)
 		self.p = self.scores / self.scores.sum()
 
-	async def use_clue(self, clue : str, session : aiohttp.ClientSession, weight_for_unknown : float) -> None:
-		answer_scores = await Tracker.aggregate_scores(clue, session, length_guess=len(self))
+	async def use_clue(self, clue : str, session : aiohttp.ClientSession, weight_for_unknown : float, async_tqdm : tqdm.tqdm = None) -> None:
+		answer_scores = await Tracker.aggregate_scores(clue, session, len(self), async_tqdm=async_tqdm)
 		answers = [None] # type: List[Optional[str]]
 		weights = [weight_for_unknown]
 		for answer, score in answer_scores.items():
@@ -620,20 +621,22 @@ class Board(object):
 			}
 			connector = aiohttp.TCPConnector(
 				limit=100, # defualt is 100 simultaneous connections
-				limit_per_host=50,
+				limit_per_host=30,
 			)
 			session = aiohttp.ClientSession(headers=headers, connector=connector)
 		assert session is not None
 		tasks = []
+		dm = tqdm.tqdm(total=sum(map(len, self.entries))*len(Tracker))
 		for entries, clues_list in zip(self.entries, clues_lists):
 			for entry, clue in zip(entries, clues_list):
-				tasks.append(entry.use_clue(clue, session, weight_for_unknown))
+				tasks.append(entry.use_clue(clue, session, weight_for_unknown, async_tqdm=dm))
 		loop = asyncio.get_event_loop()
 		answer_scores = loop.run_until_complete(asyncio.gather(*tasks))
 		if owns_session:
 			loop.run_until_complete(session.close())
 		loop.close()
+		dm.close()
 		print('Fetched clue answers!')
 		for tracker in Tracker:
 			if tracker.value.expected_answers and not tracker.value.site_gave_answers:
-				warnings.warn('Did not get any answers from {}'.format(tracker.__name__))
+				warnings.warn('Did not get any answers from {}'.format(tracker.name))
