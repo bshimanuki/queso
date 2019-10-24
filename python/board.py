@@ -7,6 +7,7 @@ import math
 import operator
 import re
 from typing import cast, Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+import warnings
 
 import aiohttp
 import numpy as np
@@ -289,7 +290,7 @@ class Entry(object):
 		'''Initialize possible answer probabilities. None is used for unknown.'''
 		assert len(answers) == len(scores)
 		# sort by score descending then answer alphabetical
-		answers, scores = zip(*sorted(zip(answers, scores), key=lambda pair: (-pair[1], pair[0])))
+		answers, scores = zip(*sorted(zip(answers, scores), key=lambda pair: (np.inf, np.inf) if pair[0] is None else (-pair[1], pair[0])))
 		for answer in answers:
 			assert answer is None or len(answer) == len(self) and answer == answerize(answer)
 		if clue is not None:
@@ -305,7 +306,7 @@ class Entry(object):
 		for answer, score in answer_scores.items():
 			# TODO: weight function, partial answer, rebus
 			answer = answerize(answer)
-			weight = score + 1
+			weight = score
 			if len(answer) == len(self):
 				answers.append(answer)
 				weights.append(weight)
@@ -633,3 +634,6 @@ class Board(object):
 			loop.run_until_complete(session.close())
 		loop.close()
 		print('Fetched clue answers!')
+		for tracker in Tracker:
+			if tracker.value.expected_answers and not tracker.value.site_gave_answers:
+				warnings.warn('Did not get any answers from {}'.format(tracker.__name__))

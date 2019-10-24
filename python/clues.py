@@ -6,6 +6,7 @@ import functools
 import html
 import io
 import itertools
+import math
 import random
 import re
 import os
@@ -51,6 +52,8 @@ class TrackerBase(abc.ABC):
 	num_trials = 3
 	min_valid_html_length = 1000 # for asserting we aren't getting error responses, valid responses seem to be at least 8k
 	semaphore = AsyncNoop() # type: Union[AsyncNoop, asyncio.Semaphore]
+	expected_answers = True
+	site_gave_answers = False
 
 	def __init__(self, clue : str, session : aiohttp.ClientSession, length_guess : int):
 		self.clue = clue
@@ -81,6 +84,17 @@ class TrackerBase(abc.ABC):
 		s = normalize_unicode(s).lower()
 		s = re.sub(r'\W+', '-', s)
 		return s
+
+	async def get_scores(self) -> Dict[str, float]:
+		doc = await self.fetch()
+		answer_scores = await self._get_scores(doc)
+		if answer_scores:
+			self.__class__.site_gave_answers = True
+		return answer_scores
+
+	@abc.abstractmethod
+	async def _get_scores(self, doc : str) -> Dict[str, float]:
+		raise NotImplementedError()
 
 	async def fetch(self) -> str:
 		'''
@@ -142,12 +156,14 @@ class Tracker(enum.Enum):
 
 	@classmethod
 	async def aggregate_scores(cls, clue : str, session : aiohttp.ClientSession, length_guess : int) -> Dict[str, float]:
-		'''Aggregate trackers and reduce by max.'''
+		'''Aggregate trackers and reduce by sum.'''
 		tracker_scores = await cls.get_scores_by_tracker(clue, session, length_guess)
 		scores = defaultdict(float) # type: Dict[str, float]
 		for _scores in tracker_scores.values():
 			for key, value in _scores.items():
-				scores[key] = max(scores[key], value)
+				scores[key] += value
+		# for key, value in scores.items():
+			# scores[key] = math.sqrt(value)
 		return scores
 
 
@@ -160,12 +176,12 @@ class Tracker(enum.Enum):
 			formdata = aiohttp.FormData()
 			formdata.add_field('q', self.clue)
 			return formdata
-		async def get_scores(self) -> Dict[str, float]:
-			doc = await self.fetch()
+		async def _get_scores(self, doc : str) -> Dict[str, float]:
 			answer_scores = {} # type: Dict[str, float]
 			matches = self.regex.findall(doc)
 			for match in matches:
 				answer_scores[match] = 1
+			self.__class__.site_gave_answers = True
 			return answer_scores
 
 	class WORDPLAYS(TrackerBase):
@@ -196,14 +212,14 @@ class Tracker(enum.Enum):
 		def url(self) -> str:
 			site = self.sites[self.index][0]
 			return site.format(self.url_clue(dash=True))
-		async def get_scores(self) -> Dict[str, float]:
-			doc = await self.fetch()
+		async def _get_scores(self, doc : str) -> Dict[str, float]:
 			answer_scores = {} # type: Dict[str, float]
 			matches = self.regex.findall(doc)
 			for match in matches:
 				star_tags, answer = match
-				stars = len(star_tags) // len(self.star_tag)
-				value = 1 if stars >= 4 else 0
+				stars = round(len(star_tags) / len(self.star_tag))
+				# value = 1 if stars >= 4 else 0
+				value = stars
 				answer_scores[answer] = value
 			return answer_scores
 
@@ -217,14 +233,14 @@ class Tracker(enum.Enum):
 		)
 		def url(self) -> str:
 			return 'https://m.crosswordheaven.com/search/result?clue={}'.format(self.url_clue())
-		async def get_scores(self) -> Dict[str, float]:
-			doc = await self.fetch()
+		async def _get_scores(self, doc : str) -> Dict[str, float]:
 			answer_scores = {} # type: Dict[str, float]
 			matches = self.regex.findall(doc)
 			for match in matches:
 				star_tags, star_tag, answer = match
 				stars = round(len(star_tags) / len(star_tag))
-				value = 1 if stars >= 4 else 0
+				# value = 1 if stars >= 4 else 0
+				value = stars
 				answer_scores[answer] = value
 			return answer_scores
 
@@ -234,14 +250,14 @@ class Tracker(enum.Enum):
 		regex = re.compile(r'<tr[^>]*>\s*<td[^>]*>\s*((?:{})*)\s*</td>\s*<td[^>]*>\s*<big>\s*<a[^>]*>([\w\s]+)</a>'.format(star_tag))
 		def url(self) -> str:
 			return 'https://crosswordnexus.com/finder.php?clue={}'.format(self.url_clue())
-		async def get_scores(self) -> Dict[str, float]:
-			doc = await self.fetch()
+		async def _get_scores(self, doc : str) -> Dict[str, float]:
 			answer_scores = {} # type: Dict[str, float]
 			matches = self.regex.findall(doc)
 			for match in matches:
 				star_tags, answer = match
 				stars = len(star_tags) // len(self.star_tag)
-				value = 1 if stars >= 3 else 0
+				# value = 1 if stars >= 3 else 0
+				value = stars / 3
 				answer_scores[answer] = value
 			return answer_scores
 
@@ -250,8 +266,7 @@ class Tracker(enum.Enum):
 		regex = re.compile(r'<li class="answer" data-count="(\d+)" data-text="([\w\s]+)">')
 		def url(self) -> str:
 			return 'http://crosswordtracker.com/search?clue={}'.format(self.url_clue(dash=True))
-		async def get_scores(self) -> Dict[str, float]:
-			doc = await self.fetch()
+		async def _get_scores(self, doc : str) -> Dict[str, float]:
 			answer_scores = {} # type: Dict[str, float]
 			matches = self.regex.findall(doc)
 			for match in matches:
@@ -267,14 +282,14 @@ class Tracker(enum.Enum):
 		regex = re.compile('<tr>\s*<td[^>]*>\s*(?:{}\s*)*(({}\s*)*)</td>\s*<td[^>]*>\s*<tt>\s*<a[^>]*>([^<]*)</a>'.format(dot, star))
 		def url(self) -> str:
 			return 'http://www.oneacross.com/cgi-bin/search_banner.cgi?c0={}&p0={}'.format(self.url_clue(), self.length_guess)
-		async def get_scores(self) -> Dict[str, float]:
-			doc = await self.fetch()
+		async def _get_scores(self, doc : str) -> Dict[str, float]:
 			answer_scores = {} # type: Dict[str, float]
 			matches = self.regex.findall(doc)
 			for match in matches:
 				star_tags, star_tag, answer = match
 				stars = round(len(star_tags) / len(star_tag))
-				value = 1 if stars >= 4 else 0
+				# value = 1 if stars >= 4 else 0
+				value = stars
 				answer_scores[answer] = value
 			return answer_scores
 
@@ -294,17 +309,10 @@ class Tracker(enum.Enum):
 			stopwords = set(line.strip() for line in f if line.strip() and not line.strip().startswith('#'))
 		def url(self) -> str:
 			return 'https://www.google.com/search?q={}'.format(self.url_clue())
-		async def get_scores(self) -> Dict[str, float]:
-			doc = await self.fetch()
+		async def _get_scores(self, doc : str) -> Dict[str, float]:
 			# remove bold tags
 			doc = doc.replace('<em>', '').replace('</em>', '')
 			doc = doc.replace('<b>', '').replace('</b>', '')
-
-			wiki_scores = {} # type: Dict[str, float]
-			wiki_matches = self.wikipeidia_regex.findall(doc)
-			for wiki_match in wiki_matches:
-				answer = answerize(wiki_match)
-				wiki_scores[answer] = 1
 
 			def get_text_ngrams(lines):
 				counter = Counter()
@@ -336,16 +344,18 @@ class Tracker(enum.Enum):
 					counter.update(word_bigrams)
 				return counter
 
+			wiki_scores = {} # type: Dict[str, float]
+			wiki_matches = self.wikipeidia_regex.findall(doc)
+			wiki_counter = get_text_ngrams(wiki_matches)
+			for answer, count in wiki_counter.items():
+				wiki_scores[answer] = 3
+
 			header_matches = self.header_regex.findall(doc)
 			snippet_matches = self.snippet_regex.findall(doc)
 			results_counter = get_text_ngrams(header_matches + snippet_matches)
 			results_scores = {} # type: Dict[str, float]
 			for answer, count in results_counter.items():
-				if count >= 4:
-					value = 1
-				else:
-					value = 0
-				results_scores[answer] = value
+				results_scores[answer] = math.sqrt(count)
 
 			soup = bs4.BeautifulSoup(doc, 'html.parser')
 			for block in soup(['script', 'style']):
@@ -357,11 +367,11 @@ class Tracker(enum.Enum):
 			soup_counter = get_text_ngrams(strings)
 			soup_scores = {} # type: Dict[str, float]
 			for answer, count in soup_counter.items():
-				soup_scores[answer] = 0
+				soup_scores[answer] = 1
 
 			answer_scores = {} # type: Dict[str, float]
 			for answer in set(itertools.chain(wiki_scores.keys(), results_scores.keys(), soup_scores.keys())):
-				answer_scores[answer] = 0
+				answer_scores[answer] = 1
 				if answer in wiki_scores and answer_scores[answer] < wiki_scores[answer]:
 					answer_scores[answer] = wiki_scores[answer]
 				if answer in results_scores and answer_scores[answer] < results_scores[answer]:
