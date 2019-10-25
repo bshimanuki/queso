@@ -422,7 +422,7 @@ class Board(object):
 	def format(self, **kwargs) -> str:
 		return self.format_multiple(board_kwargs=(({},),), **kwargs)
 
-	def format_multiple(self, board_kwargs : Optional[Iterable[Iterable[Optional[Dict[str, Any]]]]] = None, padding=2, **kwargs):
+	def format_multiple(self, board_kwargs : Optional[Iterable[Iterable[Optional[Dict[str, Any]]]]] = None, padding=2, show_entries=True, **kwargs):
 		'''
 		board_args should be a 2D grid of keyword arguments to pass to squares or None for empty space.
 		padding is the number of width inserted between boards.
@@ -450,6 +450,8 @@ class Board(object):
 			)
 		else:
 			board_kwargs = copy.deepcopy(board_kwargs)
+		num_board_y = len(board_kwargs)
+		num_board_x = max(map(len, board_kwargs))
 		for row_board_kwargs in board_kwargs:
 			for square_board_kwargs in row_board_kwargs:
 				if square_board_kwargs is not None:
@@ -470,13 +472,51 @@ class Board(object):
 					sort_order[sort_order_list] = np.arange(sort_order.size)
 					square_board_kwargs['cell_order'] = sort_order
 					square_board_kwargs['num_cells'] = self.cells.sum()
+
+		def format_entry(entry_i):
+			strings = []
+			strings.append('<td></td>' * padding)
+			for direction in Direction:
+				entries = self.entries[direction]
+				if entry_i == 0:
+					style = 'style="font-weight:bold;"'
+					for header in ('LEN', 'ANSWER', '#', direction.name):
+						strings.append('<td {}>{}</td>'.format(style, header))
+					return ''.join(strings)
+				entry_i -= 1
+				if entry_i < len(entries):
+					entry = entries[entry_i]
+					principal, *rest = map(operator.itemgetter(1), sorted(zip(entry.p, (answer if answer is None else to_str(answer) for answer in entry.answers)), reverse=True))
+					strings.append('<td>{}</td>'.format(len(entry) or ''))
+					strings.append('<td>{}</td>'.format(principal or ''))
+					strings.append('<td>{}</td>'.format(entry.number or ''))
+					strings.append('<td>{}</td>'.format(entry.clue or ''))
+					for answer in rest:
+						if answer is not None:
+							strings.append('<td>{}</td>'.format(answer))
+					return ''.join(strings)
+				entry_i  -= len(entries)
+				if entry_i == 0:
+					return None
+				entry_i -= 1
+			return None
+
+		entry_i = 0
 		strings = []
 		if output == 'html':
 			strings.append('<table><tbody>')
 		for board_y, row_board_kwargs in enumerate(board_kwargs):
 			if board_y != 0:
 				if output == 'html':
-					strings.append('<tr></tr>' * padding)
+					for _ in range(padding):
+						strings.append('<tr>')
+						strings.append('<td></td>' * ((self.shape[1] + padding) * num_board_x - padding))
+						if show_entries:
+							entry = format_entry(entry_i)
+							entry_i += 1
+							if entry is not None:
+								strings.append(entry)
+						strings.append('</tr>')
 				elif output == 'plain':
 					strings.append('\n' * padding)
 			for row in self.grid:
@@ -490,6 +530,11 @@ class Board(object):
 						strings.append(' ' * padding)
 					for square in row:
 						strings.append(square.format(**_kwargs))
+				if show_entries:
+					entry = format_entry(entry_i)
+					entry_i += 1
+					if entry is not None:
+						strings.append(entry)
 				if output == 'html':
 					strings.append('</tr>')
 				elif output == 'plain':
@@ -541,7 +586,6 @@ class Board(object):
 				answers = [None] + list(answers)
 				scores = [weight_for_unknown] + list(scores)
 				entry.set_answers(answers, scores, clue=clue)
-
 
 	def update_cells(self) -> None:
 		for row in self.grid:
