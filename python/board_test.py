@@ -17,7 +17,8 @@ if __name__ == '__main__':
     root = os.path.dirname(os.path.dirname(__file__))
     # puzzle = 'smogon'
     # puzzle = 'Oct2219'
-    puzzle = 'mashup'
+    # puzzle = 'mashup'
+    puzzle = 'cross'
 
     impath = '{}.png'.format(puzzle)
     clues_file = os.path.join(root, '{}-clues.txt'.format(puzzle))
@@ -26,7 +27,8 @@ if __name__ == '__main__':
     im = imageio.imread(os.path.join(root, 'img_test', impath))
     board = make_board(im)
 
-    weight_for_unknown = 10
+    weight_for_unknown = 100
+    weight_func = lambda x: x ** 2
     force_recompile = True
     if not force_recompile and os.path.exists(entries_file):
         with open(entries_file) as f:
@@ -34,7 +36,7 @@ if __name__ == '__main__':
     else:
         with open(clues_file) as f:
             clues = f.read()
-        board.use_clues(clues, weight_for_unknown=weight_for_unknown)
+        board.use_clues(clues, weight_for_unknown=weight_for_unknown, weight_func=weight_func)
         with open(entries_file, 'w') as f:
             f.write(board.dump_entries())
 

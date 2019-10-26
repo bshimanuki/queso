@@ -95,6 +95,7 @@ class TrackerBase(abc.ABC):
 	# subclasses should override
 	expected_answers = True
 	should_run = True
+	timeout = aiohttp.ClientTimeout(total=3) # seconds
 
 	def __init__(self, clue : str, session : aiohttp.ClientSession, length_guess : int, async_tqdm : Optional[tqdm.tqdm] = None):
 		self.clue = clue
@@ -147,12 +148,12 @@ class TrackerBase(abc.ABC):
 				self.trial = _trial
 				url = self.url()
 				if self.method == 'get':
-					task_maker = lambda: self.session.get(url)
+					task_maker = lambda: self.session.get(url, timeout=self.timeout)
 					cache_key = self.slugify('-'.join((self.method, url)))
 				else:
 					assert self.method == 'post'
 					formdata = self.formdata()
-					task_maker = lambda: self.session.post(url, data=formdata)
+					task_maker = lambda: self.session.post(url, data=formdata, timeout=self.timeout)
 					class AsyncStreamWriter():
 						def __init__(self):
 							self.bufs = []
@@ -223,9 +224,9 @@ class Tracker(enum.Enum):
 		async def _get_scores(self, doc : str) -> Dict[str, float]:
 			answer_scores = {} # type: Dict[str, float]
 			matches = self.regex.findall(doc)
-			for match in matches:
-				answer_scores[match] = 1
-			self.__class__.site_gave_answers = True
+			if any(c.isalpha() for c in self.clue):
+				for match in matches:
+					answer_scores[match] = 1
 			return answer_scores
 
 	class WORDPLAYS(TrackerBase):
@@ -437,6 +438,7 @@ if __name__ == '__main__':
 	}
 	session = aiohttp.ClientSession(headers=headers)
 	clue = 'batman sidekick'
+	# clue = '😠'
 	q = []
 	trackers = [Tracker.WORDPLAYS] # type: Optional[List[Any]] # mypy does not recognize enums
 	trackers = None

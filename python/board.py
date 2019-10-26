@@ -6,7 +6,7 @@ import functools
 import math
 import operator
 import re
-from typing import cast, Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import cast, Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 import warnings
 
 import aiohttp
@@ -300,14 +300,14 @@ class Entry(object):
 		self.scores = np.asarray(scores, dtype=np.float)
 		self.p = self.scores / self.scores.sum()
 
-	async def use_clue(self, clue : str, session : aiohttp.ClientSession, weight_for_unknown : float, async_tqdm : tqdm.tqdm = None) -> None:
+	async def use_clue(self, clue : str, session : aiohttp.ClientSession, weight_for_unknown : float, weight_func : Optional[Callable[[float], float]] = None, async_tqdm : tqdm.tqdm = None) -> None:
 		answer_scores = await Tracker.aggregate_scores(clue, session, len(self), async_tqdm=async_tqdm)
 		answers = [None] # type: List[Optional[str]]
 		weights = [weight_for_unknown]
 		for answer, score in answer_scores.items():
 			# TODO: weight function, partial answer, rebus
 			answer = answerize(answer)
-			weight = score
+			weight = score if weight_func is None else weight_func(score)
 			if len(answer) == len(self):
 				answers.append(answer)
 				weights.append(weight)
@@ -499,7 +499,7 @@ class Board(object):
 					return ''.join(strings)
 				entry_i  -= len(entries)
 				if entry_i == 0:
-					return None
+					return ''
 				entry_i -= 1
 			return None
 
@@ -541,7 +541,17 @@ class Board(object):
 					strings.append('</tr>')
 				elif output == 'plain':
 					strings.append('\n')
+
 		if output == 'html':
+			entry = format_entry(entry_i)
+			entry_i += 1
+			while entry is not None:
+				strings.append('<tr>')
+				strings.append('<td></td>' * ((self.shape[1] + padding) * num_board_x - padding))
+				strings.append(entry)
+				strings.append('</tr>')
+				entry = format_entry(entry_i)
+				entry_i += 1
 			strings.append('</tbody></table>')
 		return ''.join(strings)
 
@@ -657,7 +667,7 @@ class Board(object):
 		missing = ('last{}: {}'.format(tuple(direction.name for direction in direction_order), entry.name) for direction_order, entry in missing_entries.items())
 		raise ValueError('could not find all clues: {}'.format(' '.join(missing)))
 
-	def use_clues(self, clues : str, weight_for_unknown : float, session : Optional[aiohttp.ClientSession] = None) -> None:
+	def use_clues(self, clues : str, weight_for_unknown : float, session : Optional[aiohttp.ClientSession] = None, weight_func : Optional[Callable[[float], float]] = None) -> None:
 		print('Fetching clue answers...')
 		owns_session = session is None
 		clues_lists = self.parse_clues(clues)
@@ -675,7 +685,7 @@ class Board(object):
 		dm = tqdm.tqdm(total=sum(map(len, self.entries))*len(Tracker))
 		for entries, clues_list in zip(self.entries, clues_lists):
 			for entry, clue in zip(entries, clues_list):
-				tasks.append(entry.use_clue(clue, session, weight_for_unknown, async_tqdm=dm))
+				tasks.append(entry.use_clue(clue, session, weight_for_unknown, weight_func=weight_func, async_tqdm=dm))
 		loop = asyncio.get_event_loop()
 		answer_scores = loop.run_until_complete(asyncio.gather(*tasks))
 		if owns_session:
