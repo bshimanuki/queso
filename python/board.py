@@ -406,17 +406,19 @@ class Board(object):
 			for x in range(self.shape[1]):
 				square = self.grid[y, x]
 				if square.number:
-					if x == 0 or not self.grid[y, x-1].is_cell or self.grid[y, x-1].bar_right:
-						entry = Entry(self, (y, x), Direction.ACROSS)
-						self.entries[Direction.ACROSS].append(entry)
+					if square.left is None or not square.left.is_cell or square.left.bar_right:
+						if square.right is not None and square.right.is_cell:
+							entry = Entry(self, (y, x), Direction.ACROSS)
+							self.entries[Direction.ACROSS].append(entry)
 		for x in range(self.shape[1]):
 			entry = None
 			for y in range(self.shape[0]):
 				square = self.grid[y, x]
 				if square.number:
-					if y == 0 or not self.grid[y-1, x].is_cell or self.grid[y-1, x].bar_below:
-						entry = Entry(self, (y, x), Direction.DOWN)
-						self.entries[Direction.DOWN].append(entry)
+					if square.up is None or not square.up.is_cell or square.up.bar_below:
+						if square.down is not None and square.down.is_cell:
+							entry = Entry(self, (y, x), Direction.DOWN)
+							self.entries[Direction.DOWN].append(entry)
 		self.entries[Direction.DOWN] = sorted(self.entries[Direction.DOWN])
 
 	def format(self, **kwargs) -> str:

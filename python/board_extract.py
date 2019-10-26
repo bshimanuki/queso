@@ -6,6 +6,7 @@ import cv2
 import imageio
 import numpy as np
 import scipy.interpolate
+import scipy.ndimage
 import scipy.signal
 import skimage
 
@@ -52,8 +53,8 @@ def is_far_from_edge(im: np.ndarray, loc: Tuple[int, int], thresh: int = 1) -> b
 			return False
 	return True
 
-def get_interpolated_peak(im: np.ndarray, dis_loc: Tuple[int, int], delta: int = 1, order: int = 2) -> np.ndarray:
-	'''Get the continuous location of a peak from a discrete 2D sample.'''
+def get_interpolated_peak(im: np.ndarray, dis_loc: Tuple[int, int], delta: int = 1, order: int = 2) -> Tuple[np.ndarray, float]:
+	'''Get the continuous location of a peak from a discrete 2D sample and the value.'''
 	assert is_far_from_edge(im, dis_loc, delta)
 	y, x = dis_loc
 	im_partial = im[y-delta:y+delta+1, x-delta:x+delta+1]
@@ -65,11 +66,11 @@ def get_interpolated_peak(im: np.ndarray, dis_loc: Tuple[int, int], delta: int =
 		ky=order,
 	)
 	result = scipy.optimize.minimize(
-		lambda x: spline(*x),
+		lambda x: spline(*x).item(),
 		dis_loc,
 		bounds=((y-delta, y+delta), (x-delta, x+delta)),
 	)
-	return result.x
+	return result.x, -spline(*result.x).item()
 
 def save_color(fname: str, im: np.ndarray) -> None:
 	'''Save monocromatic image in color as a colormap.'''
@@ -130,7 +131,7 @@ def get_square_size(im: np.ndarray) -> Tuple[float, float]:
 	for i in range(20): #TODO:edit number of tries
 		dis_loc = np.unravel_index(g.argmax(), g.shape)
 		if is_far_from_edge(g, dis_loc):
-			cont_loc = get_interpolated_peak(g, dis_loc)
+			cont_loc, _ = get_interpolated_peak(g, dis_loc)
 			peaks.append(cont_loc)
 			# print(dis_loc, cont_loc)
 		y_peak_slice = get_mountain_slice(g[:,dis_loc[1]], dis_loc[0])
@@ -277,21 +278,29 @@ def get_offset(im: np.ndarray, square_size: Tuple[float, float]) -> np.ndarray:
 	grid = make_grid(im, square_size, waveform='sawtooth', double_size=True)
 	# save('grid.png', grid)
 
-	bw = make_normalized_mono(im)
+	# dilated = cv2.dilate(im, np.ones(tuple(math.ceil(x / 8) for x in square_size)), iterations=1)
+	kernel_shape = tuple(max(2, math.ceil(x / 8)) for x in square_size)
+	if im.ndim == 3:
+		kernel_shape += (1,)
+	dilated = scipy.ndimage.maximum_filter(im, kernel_shape)
+	mask = skimage.img_as_float(dilated - im)
+	# save('mask.png', mask)
+	masked_im = (mask.transpose() * skimage.img_as_float(im).transpose()).transpose() + (1 - mask)
+	# save('masked_im.png', masked_im)
+
+	bw = make_normalized_mono(masked_im)
 	grid = make_normalized_mono(grid)
 	cor = scipy.signal.fftconvolve(bw, np.flip(grid), mode='valid')
-	cor_mag = np.abs(cor)
-	# save_color('grid_match.png', cor_mag)
 
-	g = np.array(cor_mag)
+	g = np.array(cor)
 	dis_loc = (0, 0)
 	while not is_far_from_edge(g, dis_loc):
 		g[dis_loc] = 0
 		dis_loc = np.unravel_index(g.argmax(), g.shape)
-	cont_loc = get_interpolated_peak(g, dis_loc)
-	offset = cont_loc - tuple((s-1)/2 for s in cor_mag.shape)
+	cont_loc, peak = get_interpolated_peak(g, dis_loc)
+	offset = cont_loc - tuple((s-1)/2 for s in cor.shape)
 	offset %= square_size
-	return offset
+	return offset, peak
 
 def cluster_splits(xs: np.ndarray, stop_factor: float = 2, stop_base_idx: int = 10, thresh:float = 5e-2) -> List[float]:
 	'''
@@ -303,7 +312,11 @@ def cluster_splits(xs: np.ndarray, stop_factor: float = 2, stop_base_idx: int = 
 	stop_base_idx = min(stop_base_idx, math.ceil(xs.size / 2))
 
 	xs = np.sort(xs)
+	if xs.size == 0:
+		return []
 	diffs = np.diff(xs) # n - 1 elts
+	if diffs.size == 0:
+		return []
 	idxs = np.argpartition(diffs, -stop_base_idx)[-stop_base_idx:]
 	idxs = idxs[np.argsort(diffs[idxs])][::-1]
 	base = diffs[idxs[-1]]
@@ -411,18 +424,20 @@ def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple
 	squares_center = reduceat_mean(im, grid_middle, y_sep, x_sep, background=squares_background)
 	# save('squares_center.png', squares_center, resize=im)
 	squares_horiz = reduceat_mean(im, grid_horiz, y_cen, x_sep, background=squares_background)
-	save('squares_horiz.png', squares_horiz, resize=im)
+	squares_horiz = np.abs(squares_horiz - squares_center)
+	# save('squares_horiz.png', squares_horiz, resize=im)
 	squares_vert = reduceat_mean(im, grid_vert, y_sep, x_cen, background=squares_background)
-	save('squares_vert.png', squares_vert, resize=im)
+	squares_vert = np.abs(squares_vert - squares_center)
+	# save('squares_vert.png', squares_vert, resize=im)
 	squares_qii = reduceat_mean(im, grid_qii, y_sep, x_sep, background=squares_background, op=blacker, mean=False)
 	# save('squares_qii.png', squares_qii, resize=im)
 
 	# compute which square candidates are squares in the actual grid
-	squares_topbottom = whiter(np.insert(squares_horiz, 0, squares_background[0], axis=0)[:-1], squares_horiz)
+	squares_topbottom = blacker(np.insert(squares_horiz, 0, 0, axis=0)[:-1], squares_horiz)
 	# save('squares_topbottom.png', squares_topbottom, resize=im)
-	squares_leftright = whiter(np.insert(squares_vert, 0, squares_background[:,0], axis=1)[:,:-1], squares_vert)
+	squares_leftright = blacker(np.insert(squares_vert, 0, 0, axis=1)[:,:-1], squares_vert)
 	# save('squares_leftright.png', squares_leftright, resize=im)
-	squares_bordered = whiter(squares_topbottom, squares_leftright)
+	squares_bordered = blacker(squares_topbottom, squares_leftright)
 	# save('squares_bordered.png', squares_bordered, resize=im)
 
 	def separate(mask: np.ndarray, values: np.ndarray, condition: np.ufunc, condition2: np.ufunc, default: Optional[np.ndarray] = None, **cluster_split_kwargs) -> np.ndarray:
@@ -453,7 +468,7 @@ def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple
 		return ret
 
 	# separate outside from board grid
-	board = separate(mask=None, values=squares_bordered, condition=blacker, condition2=whiter)
+	board = separate(mask=None, values=squares_bordered, condition=whiter, condition2=blacker)
 	save('board.png', board, resize=im)
 	empty = np.zeros_like(board)
 
@@ -467,13 +482,13 @@ def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple
 
 	# separate horizontal borders
 	cells_with_below = np.logical_and(cells, np.insert(cells, -1, False, axis=0)[1:])
-	cells_border_below = separate(mask=cells_with_below, values=squares_horiz, condition=blacker, condition2=blacker, default=empty, stop_factor=8)
-	save('cells_border_below.png', cells_border_below, resize=im)
+	cells_border_below = separate(mask=cells_with_below, values=squares_horiz, condition=whiter, condition2=whiter, default=empty, stop_factor=8)
+	# save('cells_border_below.png', cells_border_below, resize=im)
 
 	# separate vertical borders
 	cells_with_right = np.logical_and(cells, np.insert(cells, -1, False, axis=1)[:,1:])
-	cells_border_right = separate(mask=cells_with_right, values=squares_vert, condition=blacker, condition2=blacker, default=empty, stop_factor=8)
-	save('cells_border_right.png', cells_border_right, resize=im)
+	cells_border_right = separate(mask=cells_with_right, values=squares_vert, condition=whiter, condition2=whiter, default=empty, stop_factor=8)
+	# save('cells_border_right.png', cells_border_right, resize=im)
 
 	# trim to board
 	board_coords = np.nonzero(board)
@@ -497,7 +512,13 @@ def make_board(im : np.ndarray) -> Board:
 
 	square_size = get_square_size(im)
 	print('square size:', square_size)
-	offset = get_offset(im, square_size)
+	offset, peak = get_offset(im, square_size)
+	square_size_half = tuple(x / 2 for x in square_size)
+	offset_half, peak_half = get_offset(im, square_size_half)
+	# print(peak, peak_half)
+	if peak_half > peak:
+		square_size, offset, peak = square_size_half, offset_half, peak_half
+		print('half square size fits better, using square size:', square_size)
 	print('offset:', offset)
 
 	grid = make_grid(im, square_size, offset, waveform='sawtooth', double_size=False)
@@ -507,6 +528,7 @@ def make_board(im : np.ndarray) -> Board:
 	save('c.png', im)
 
 	board = analyze_grid(im, square_size, offset)
+	print('board shape:', '{}x{}'.format(*board.shape))
 
 	return board
 
@@ -521,6 +543,7 @@ if __name__ == '__main__':
 	# impath = 'fill_in_blanks.png'
 	# impath = 'smogon_70.png'
 	# impath = 'smogon_33.png'
+	# impath = 'mashup.png'
 	im = imageio.imread(os.path.join(root, 'img_test', impath))
 
 	board = make_board(im)
