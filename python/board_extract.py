@@ -389,20 +389,22 @@ def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple
 		save('cen.png', grid_cen)
 
 	# operations to get the average/min/max value of masked squares
-	def reduceat_op(grid, ys, xs, op=np.add):
-		grid = op.reduceat(grid, ys, axis=0)
-		grid = op.reduceat(grid, xs, axis=1)
+	def reduceat_op(grid, splits, op=np.add, op2=None, order=(0,1)):
+		if op2 is None:
+			op2 = op
+		grid = op.reduceat(grid, splits[order[0]], axis=order[0])
+		grid = op2.reduceat(grid, splits[order[1]], axis=order[1])
 		return grid
-	def reduceat_mean(im, grid, ys, xs, background=None, op=np.add, mean=True):
+	def reduceat_mean(im, grid, ys, xs, background=None, mean=True, **kwargs):
 		if background is None:
 			background = np.zeros_like(ret)
 		if mean:
 			im = im * grid
 		else:
 			im = np.where(grid == 1, im, np.full_like(im, np.nan))
-		ret = reduceat_op(im, ys, xs, op=op)
+		ret = reduceat_op(im, (ys, xs), **kwargs)
 		if mean:
-			grid_sum = reduceat_op(grid, ys, xs, op=op)
+			grid_sum = reduceat_op(grid, (ys, xs), **kwargs)
 			ret = np.where(grid_sum == 0, background, np.divide(ret, grid_sum, where=grid_sum>0))
 		else:
 			ret = np.where(np.isnan(ret), background, ret)
@@ -422,11 +424,11 @@ def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple
 	# horizontal is bottom, vertical is right
 	squares_center = reduceat_mean(im, grid_middle, y_sep, x_sep, background=squares_background)
 	# save('squares_center.png', squares_center, resize=im)
-	squares_horiz = reduceat_mean(im, grid_horiz, y_cen, x_sep, background=squares_background)
-	squares_horiz = np.abs(squares_horiz - squares_center)
+	squares_horiz = reduceat_mean(im, grid_horiz, y_cen, x_sep, background=squares_background, op=np.add, op2=whiter, order=(0,1))
+	squares_horiz = np.abs(squares_horiz - squares_background)
 	save('squares_horiz.png', squares_horiz, resize=im)
-	squares_vert = reduceat_mean(im, grid_vert, y_sep, x_cen, background=squares_background)
-	squares_vert = np.abs(squares_vert - squares_center)
+	squares_vert = reduceat_mean(im, grid_vert, y_sep, x_cen, background=squares_background, op=np.add, op2=whiter, order=(1,0))
+	squares_vert = np.abs(squares_vert - squares_background)
 	save('squares_vert.png', squares_vert, resize=im)
 	squares_qii = reduceat_mean(im, grid_qii, y_sep, x_sep, background=squares_background, op=blacker, mean=False)
 	# save('squares_qii.png', squares_qii, resize=im)
@@ -546,13 +548,14 @@ if __name__ == '__main__':
 	import os
 	import sys
 	root = os.path.dirname(os.path.dirname(__file__))
-	# impath = 'wild.png'
+	impath = 'wild.png'
 	# impath = 'wild_big.png'
-	impath = 'smogon.png'
+	# impath = 'smogon.png'
 	# impath = 'fill_in_blanks.png'
 	# impath = 'smogon_70.png'
 	# impath = 'smogon_33.png'
 	# impath = 'mashup.png'
+	# impath = 'caged.png'
 	im = imageio.imread(os.path.join(root, 'test_cases', impath))
 
 	board = make_board(im)
