@@ -322,6 +322,7 @@ class Tracker(enum.Enum):
 	class ONEACROSS(TrackerBase):
 		# TODO: determine if needs to be rate limited
 		method = 'get'
+		semaphore = asyncio.Semaphore(20)
 		dot = '<img[^>]* src=[^>]*dot[^>]*>'
 		star = '<img[^>]* src=[^>]*star[^>]*>'
 		regex = re.compile('<tr>\s*<td[^>]*>\s*(?:{}\s*)*(({}\s*)*)</td>\s*<td[^>]*>\s*<tt>\s*<a[^>]*>([^<]*)</a>'.format(dot, star))

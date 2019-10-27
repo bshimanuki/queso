@@ -18,13 +18,14 @@ if __name__ == '__main__':
     # puzzle = 'smogon'
     # puzzle = 'Oct2219'
     # puzzle = 'mashup'
-    puzzle = 'cross'
+    # puzzle = 'cross'
+    puzzle = 'caged'
 
     impath = '{}.png'.format(puzzle)
-    clues_file = os.path.join(root, '{}-clues.txt'.format(puzzle))
+    clues_file = os.path.join(root, 'test_cases', '{}-clues.txt'.format(puzzle))
     entries_file = os.path.join(root, '{}-entries.txt'.format(puzzle))
 
-    im = imageio.imread(os.path.join(root, 'img_test', impath))
+    im = imageio.imread(os.path.join(root, 'test_cases', impath))
     board = make_board(im)
 
     weight_for_unknown = 100

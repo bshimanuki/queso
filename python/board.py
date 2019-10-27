@@ -287,7 +287,7 @@ class Entry(object):
 	def __lt__(self, other):
 		return self.number < other.number
 
-	def set_answers(self, answers: Sequence[Optional[str]], scores: Sequence[float], clue=Optional[str]) -> None:
+	def set_answers(self, answers: Sequence[Optional[str]], scores: Sequence[float], clue : Optional[str] = None) -> None:
 		'''Initialize possible answer probabilities. None is used for unknown.'''
 		assert len(answers) == len(scores)
 		# sort by score descending then answer alphabetical
@@ -401,25 +401,41 @@ class Board(object):
 					square.right = self.grid[y, x+1];
 
 		# make entries
+		crossless = 0
+		numberless = 0
 		for y in range(self.shape[0]):
 			entry = None
 			for x in range(self.shape[1]):
 				square = self.grid[y, x]
-				if square.number:
+				if square.is_cell:
 					if square.left is None or not square.left.is_cell or square.left.bar_right:
-						if square.right is not None and square.right.is_cell:
-							entry = Entry(self, (y, x), Direction.ACROSS)
-							self.entries[Direction.ACROSS].append(entry)
+						if not square.bar_right and square.right is not None and square.right.is_cell:
+							if square.number:
+								entry = Entry(self, (y, x), Direction.ACROSS)
+								self.entries[Direction.ACROSS].append(entry)
+							else:
+								numberless += 1
+						else:
+							crossless += 1
 		for x in range(self.shape[1]):
 			entry = None
 			for y in range(self.shape[0]):
 				square = self.grid[y, x]
-				if square.number:
+				if square.is_cell:
 					if square.up is None or not square.up.is_cell or square.up.bar_below:
-						if square.down is not None and square.down.is_cell:
-							entry = Entry(self, (y, x), Direction.DOWN)
-							self.entries[Direction.DOWN].append(entry)
+						if not square.bar_below and square.down is not None and square.down.is_cell:
+							if square.number:
+								entry = Entry(self, (y, x), Direction.DOWN)
+								self.entries[Direction.DOWN].append(entry)
+							else:
+								numberless += 1
+						else:
+							crossless += 1
 		self.entries[Direction.DOWN] = sorted(self.entries[Direction.DOWN])
+		if crossless:
+			warnings.warn('{} cells are missing crosses'.format(crossless))
+		if numberless:
+			warnings.warn('{} cells are missing numbers'.format(numberless))
 
 	def format(self, **kwargs) -> str:
 		return self.format_multiple(board_kwargs=(({},),), **kwargs)
@@ -661,10 +677,10 @@ class Board(object):
 			if tuple(map(len, clues_lists)) == tuple(map(len, self.entries)):
 				return clues_lists
 			else:
-				assert last_entry is not None
-				missing_entries[direction_order] = last_entry
+				assert next_entry is not None
+				missing_entries[direction_order] = next_entry
 
-		missing = ('last{}: {}'.format(tuple(direction.name for direction in direction_order), entry.name) for direction_order, entry in missing_entries.items())
+		missing = ('next{}: {}'.format(tuple(direction.name for direction in direction_order), entry.name) for direction_order, entry in missing_entries.items())
 		raise ValueError('could not find all clues: {}'.format(' '.join(missing)))
 
 	def use_clues(self, clues : str, weight_for_unknown : float, session : Optional[aiohttp.ClientSession] = None, weight_func : Optional[Callable[[float], float]] = None) -> None:

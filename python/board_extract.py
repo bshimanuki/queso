@@ -13,7 +13,7 @@ import skimage
 from board import Board
 from clipboard_qt import set_clipboard
 
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 blacker = np.fmin
 whiter = np.fmax
@@ -180,7 +180,7 @@ def get_square_size(im: np.ndarray) -> Tuple[float, float]:
 					thresh *= thresh_scaling_factor
 
 					x_weight = f.numerator
-					x_val = x / x_weight
+					x_val = x / f.numerator
 					weight *= f.denominator
 					val /= f.denominator
 					total = val * weight + x_val * x_weight
@@ -278,7 +278,6 @@ def get_offset(im: np.ndarray, square_size: Tuple[float, float]) -> np.ndarray:
 	grid = make_grid(im, square_size, waveform='sawtooth', double_size=True)
 	# save('grid.png', grid)
 
-	# dilated = cv2.dilate(im, np.ones(tuple(math.ceil(x / 8) for x in square_size)), iterations=1)
 	kernel_shape = tuple(max(2, math.ceil(x / 8)) for x in square_size)
 	if im.ndim == 3:
 		kernel_shape += (1,)
@@ -425,10 +424,10 @@ def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple
 	# save('squares_center.png', squares_center, resize=im)
 	squares_horiz = reduceat_mean(im, grid_horiz, y_cen, x_sep, background=squares_background)
 	squares_horiz = np.abs(squares_horiz - squares_center)
-	# save('squares_horiz.png', squares_horiz, resize=im)
+	save('squares_horiz.png', squares_horiz, resize=im)
 	squares_vert = reduceat_mean(im, grid_vert, y_sep, x_cen, background=squares_background)
 	squares_vert = np.abs(squares_vert - squares_center)
-	# save('squares_vert.png', squares_vert, resize=im)
+	save('squares_vert.png', squares_vert, resize=im)
 	squares_qii = reduceat_mean(im, grid_qii, y_sep, x_sep, background=squares_background, op=blacker, mean=False)
 	# save('squares_qii.png', squares_qii, resize=im)
 
@@ -438,9 +437,9 @@ def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple
 	squares_leftright = blacker(np.insert(squares_vert, 0, 0, axis=1)[:,:-1], squares_vert)
 	# save('squares_leftright.png', squares_leftright, resize=im)
 	squares_bordered = blacker(squares_topbottom, squares_leftright)
-	# save('squares_bordered.png', squares_bordered, resize=im)
+	save('squares_bordered.png', squares_bordered, resize=im)
 
-	def separate(mask: np.ndarray, values: np.ndarray, condition: np.ufunc, condition2: np.ufunc, default: Optional[np.ndarray] = None, **cluster_split_kwargs) -> np.ndarray:
+	def separate(mask: np.ndarray, values: np.ndarray, condition: np.ufunc, condition2: np.ufunc, default: Optional[np.ndarray] = None, aux_output : Optional[Dict[Any, Any]] = None, **cluster_split_kwargs) -> np.ndarray:
 		'''
 		Separate values based on a condition.
 
@@ -462,13 +461,21 @@ def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple
 		else:
 			if default is None:
 				raise RuntimeError('no splits were found')
+			elif aux_output is not None:
+				aux_output['default'] = True
 			ret = default
 		if mask is not None:
 			ret = np.logical_and(mask, ret)
 		return ret
 
 	# separate outside from board grid
-	board = separate(mask=None, values=squares_bordered, condition=whiter, condition2=blacker)
+	white_background = squares_background == whiter.reduce(squares_background, axis=(0,1))
+	while white_background.ndim > 2:
+		white_background = white_background.all(axis=-1)
+	aux_output = {}
+	board = separate(mask=None, values=squares_bordered, condition=whiter, condition2=blacker, default=white_background, aux_output=aux_output)
+	if aux_output.get('default', False):
+		warnings.warn('Could not get board from borders, using white background instead.')
 	save('board.png', board, resize=im)
 	empty = np.zeros_like(board)
 
@@ -506,6 +513,8 @@ def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple
 
 
 def make_board(im : np.ndarray) -> Board:
+	if im.ndim == 2:
+		im = im[..., np.newaxis]
 	if im.ndim == 3 and im.shape[-1] == 4:
 		# remove alpha channel
 		im = im[..., :3]
@@ -544,7 +553,7 @@ if __name__ == '__main__':
 	# impath = 'smogon_70.png'
 	# impath = 'smogon_33.png'
 	# impath = 'mashup.png'
-	im = imageio.imread(os.path.join(root, 'img_test', impath))
+	im = imageio.imread(os.path.join(root, 'test_cases', impath))
 
 	board = make_board(im)
 	output = board.format()
