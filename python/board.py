@@ -146,11 +146,12 @@ class Square(object):
 		'''
 		Get value based on entries and number of agreements, or -1 for conflicting.
 		'''
-		counts = defaultdict(int)
+		counts = defaultdict(int) # type: Dict[str, int]
 		for entry, idx in zip(self.entries, self.entry_indices):
 			if entry is not None:
 				answer = entry.most_probable()
 				if answer is not None:
+					assert idx is not None
 					counts[answer[idx]] += 1
 		if len(counts) > 1:
 			return None, -1
@@ -172,9 +173,9 @@ class Square(object):
 		assert output in ('plain', 'html')
 		strings = []
 		if use_entries:
-				c, prob = self.get_entry_agreement()
+			c, prob = self.get_entry_agreement() # type: Tuple[Optional[str], float]
 		else:
-				c, prob = self.get_contents(**kwargs)
+			c, prob = self.get_contents(**kwargs)
 		if output == 'html':
 			border_style = '2px solid #000000'
 			styles = []
@@ -474,9 +475,9 @@ class Board(object):
 		return sum(map(len, self.entries))
 
 	def format(self, **kwargs) -> str:
-		return self.format_multiple(board_kwargs=(({},),), **kwargs)
+		return self.format_multiple(board_kwargs=(({},),), **kwargs) # type: ignore # embedded dict
 
-	def format_multiple(self, board_kwargs : Optional[Iterable[Iterable[Optional[Dict[str, Any]]]]] = None, padding=2, show_entries=True, **kwargs):
+	def format_multiple(self, board_kwargs : Optional[Sequence[Sequence[Optional[Dict[str, Any]]]]] = None, padding=2, show_entries=True, **kwargs):
 		'''
 		board_args should be a 2D grid of keyword arguments to pass to squares or None for empty space.
 		padding is the number of width inserted between boards.
@@ -739,12 +740,7 @@ class Board(object):
 			for entry, clue in zip(entries, clues_list):
 				tasks.append(entry.use_clue(clue, session, weight_for_unknown, weight_func=weight_func, async_tqdm=dm))
 		loop = asyncio.get_event_loop()
-		try:
-			answer_scores = loop.run_until_complete(asyncio.gather(*tasks))
-		except asyncio.CancelledError:
-			import sys
-			print(sys.exc_info())
-			raise
+		loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
 		if owns_session:
 			loop.run_until_complete(session.close())
 		loop.close()

@@ -13,7 +13,7 @@ import skimage
 from board import Board
 from clipboard_qt import set_clipboard
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import cast, Any, Dict, List, Optional, Tuple
 
 blacker = np.fmin
 whiter = np.fmax
@@ -473,7 +473,7 @@ def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple
 	white_background = squares_background == whiter.reduce(squares_background, axis=(0,1))
 	while white_background.ndim > 2:
 		white_background = white_background.all(axis=-1)
-	aux_output = {}
+	aux_output = {} # type: Dict[Any, Any]
 	board = separate(mask=None, values=squares_bordered, condition=whiter, condition2=blacker, default=white_background, aux_output=aux_output)
 	if aux_output.get('default', False):
 		warnings.warn('Could not get board from borders, using white background instead.')
@@ -523,7 +523,7 @@ def make_board(im : np.ndarray) -> Board:
 	square_size = get_square_size(im)
 	print('square size:', square_size)
 	offset, peak = get_offset(im, square_size)
-	square_size_half = tuple(x / 2 for x in square_size)
+	square_size_half = cast(Tuple[float, float], tuple(x / 2 for x in square_size))
 	offset_half, peak_half = get_offset(im, square_size_half)
 	# print(peak, peak_half)
 	if peak_half > peak:

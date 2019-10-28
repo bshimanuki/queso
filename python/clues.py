@@ -47,9 +47,10 @@ async def get_proxy(session : aiohttp.ClientSession, state={}) -> Optional[str]:
 						doc = ''
 				state['proxies'] = doc.split()
 	proxy = None
-	if state['proxies']:
-		idx = random.randrange(len(state['proxies']))
-		proxy = 'http://' + state['proxies'][idx % len(state['proxies'])]
+	proxies = cast(Optional[List[str]], state['proxies'])
+	if proxies:
+		idx = random.randrange(len(proxies))
+		proxy = 'http://' + proxies[idx % len(proxies)]
 	else:
 		warnings.warn('Could not get a proxies list. Fetching resources directly.')
 	return proxy
@@ -172,10 +173,12 @@ class TrackerBase(abc.ABC):
 			doc = None
 			if not self.should_run:
 				return ''
-			for _trial in range(self.num_trials):
-				if self.use_proxy and _trial > 0:
+			trial = 0
+			while trial < self.num_trials:
+				if self.use_proxy and trial > 0:
 					break
-				self.trial = _trial
+				trial += 1
+				self.trial = trial
 				url = self.url()
 				if self.method == 'get':
 					task_maker = lambda **fetch_kwargs: self.session.get(url, **fetch_kwargs)
@@ -199,7 +202,7 @@ class TrackerBase(abc.ABC):
 					with open(cache_file, 'rb') as f:
 						doc = f.read().decode('utf-8')
 				else:
-					pending = []
+					pending = set()
 					if self.use_proxy:
 						proxy = await get_proxy(self.session)
 						if proxy is None:
@@ -216,8 +219,8 @@ class TrackerBase(abc.ABC):
 							'timeout': aiohttp.ClientTimeout(total=timeout),
 							'proxy': proxy,
 						}
-						task = task_maker(**fetch_kwargs)
-						pending.append(asyncio.ensure_future(task))
+						coroutine = task_maker(**fetch_kwargs)
+						pending.add(asyncio.ensure_future(coroutine))
 					semaphore = AsyncNoop() if self.use_proxy else self.semaphore
 					async with semaphore:
 						while doc is None and pending:
@@ -240,8 +243,9 @@ class TrackerBase(abc.ABC):
 							except:
 								pass
 					if doc is None:
-						# wait and try others before trying again
-						await asyncio.sleep(1)
+						if not self.use_proxy:
+							# wait and try others before trying again
+							await asyncio.sleep(1)
 					else:
 						os.makedirs(CACHE_DIR, exist_ok=True)
 						with open(cache_file, 'wb') as f:
@@ -249,7 +253,7 @@ class TrackerBase(abc.ABC):
 				if doc is not None:
 					return doc
 			# could not get resource
-			warnings.warn('Failed connection to {} after {} tries... skipping'.format(self.__class__.__name__, self.num_trials))
+			warnings.warn('Failed connection to {} after {} tries... skipping'.format(self.__class__.__name__, trial))
 			self.__class__.could_not_fetch += 1
 			return ''
 		finally:
