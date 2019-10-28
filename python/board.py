@@ -142,6 +142,23 @@ class Square(object):
 		c = chr(idx + ord('A'))
 		return c, prob
 
+	def get_entry_agreement(self) -> Tuple[Optional[str], int]:
+		'''
+		Get value based on entries and number of agreements, or -1 for conflicting.
+		'''
+		counts = defaultdict(int)
+		for entry, idx in zip(self.entries, self.entry_indices):
+			if entry is not None:
+				answer = entry.most_probable()
+				if answer is not None:
+					counts[answer[idx]] += 1
+		if len(counts) > 1:
+			return None, -1
+		for value, count in counts.items():
+			# return the singleton
+			return value, count
+		return None, 0
+
 	def format(self, **kwargs) -> str:
 		output = kwargs.get('output', 'html')
 		display = kwargs.get('display', True)
@@ -151,21 +168,33 @@ class Square(object):
 		cell_order = kwargs.get('cell_order', None)
 		num_cells = kwargs.get('num_cells', None)
 		color_probability = kwargs.get('color_probability', not number)
+		use_entries = kwargs.get('use_entries', False)
 		assert output in ('plain', 'html')
 		strings = []
+		if use_entries:
+				c, prob = self.get_entry_agreement()
+		else:
+				c, prob = self.get_contents(**kwargs)
 		if output == 'html':
 			border_style = '2px solid #000000'
 			styles = []
 			if display:
-				if self.is_cell and color_probability and cell_order is not None:
+				white = np.array([1, 1, 1], dtype=np.float)
+				red = np.array([230, 124, 115], dtype=np.float) / 255
+				green = np.array([87, 187, 138], dtype=np.float) / 255
+				if self.is_cell and color_probability and use_entries:
+					if prob > 1:
+						color = Color(green)
+					elif prob < 0:
+						color = Color(red)
+					else:
+						color = Color(white)
+				elif self.is_cell and color_probability and cell_order is not None:
 					assert num_cells is not None
 					v = cell_order[self.y, self.x]
-					percentile = v / (num_cells - 1) if num_cells > 1 else 0.5
-					white = np.array([1, 1, 1], dtype=np.float)
-					red = np.array([230, 124, 115], dtype=np.float) / 255
-					green = np.array([87, 187, 138], dtype=np.float) / 255
+					quantile = v / (num_cells - 1) if num_cells > 1 else 0.5
 					colors = np.stack((red, white, green))
-					rgb = np.array([np.interp(percentile, [0, 0.5, 1], _color) for _color in colors.T])
+					rgb = np.array([np.interp(quantile, [0, 0.5, 1], _color) for _color in colors.T])
 					color = Color(rgb)
 				else:
 					color = self.color
@@ -185,10 +214,9 @@ class Square(object):
 				strings.append(str(self.number))
 			if self.is_cell:
 				if fill:
-					c, prob = self.get_contents(**kwargs)
-					strings.append(c)
+					if c is not None:
+						strings.append(c)
 				elif probabilities and not number:
-					c, prob = self.get_contents(**kwargs)
 					strings.append(str(prob))
 		if output == 'html':
 			strings.append('</td>')
@@ -286,6 +314,10 @@ class Entry(object):
 
 	def __lt__(self, other):
 		return self.number < other.number
+
+	def most_probable(self) -> Optional[str]:
+		answer = self.answers[self.p.argmax()]
+		return answer if answer is None else to_str(answer)
 
 	def set_answers(self, answers: Sequence[Optional[str]], scores: Sequence[float], clue : Optional[str] = None) -> None:
 		'''Initialize possible answer probabilities. None is used for unknown.'''
@@ -437,6 +469,10 @@ class Board(object):
 		if numberless:
 			warnings.warn('{} cells are missing numbers'.format(numberless))
 
+	@property
+	def num_entries(self):
+		return sum(map(len, self.entries))
+
 	def format(self, **kwargs) -> str:
 		return self.format_multiple(board_kwargs=(({},),), **kwargs)
 
@@ -451,19 +487,19 @@ class Board(object):
 			board_kwargs = (
 				(
 					{'fill': False, 'number': True, 'probabilities': False},
+					{'fill': True, 'number': False, 'probabilities': False, 'use_entries': True},
+				),
+				(
+					{'fill': False, 'number': False, 'probabilities': True},
 					{'fill': True, 'number': False, 'probabilities': False},
 				),
 				(
 					{'fill': False, 'number': False, 'probabilities': True, 'reduce_op': operator.itemgetter(0)},
-					{'fill': False, 'number': False, 'probabilities': True, 'reduce_op': operator.itemgetter(1)},
-				),
-				(
 					{'fill': True, 'number': False, 'probabilities': False, 'reduce_op': operator.itemgetter(0)},
-					{'fill': True, 'number': False, 'probabilities': False, 'reduce_op': operator.itemgetter(1)},
 				),
 				(
-					{'fill': False, 'number': False, 'probabilities': True},
-					None,
+					{'fill': False, 'number': False, 'probabilities': True, 'reduce_op': operator.itemgetter(1)},
+					{'fill': True, 'number': False, 'probabilities': False, 'reduce_op': operator.itemgetter(1)},
 				),
 			)
 		else:
@@ -684,21 +720,21 @@ class Board(object):
 		raise ValueError('could not find all clues: {}'.format(' '.join(missing)))
 
 	def use_clues(self, clues : str, weight_for_unknown : float, session : Optional[aiohttp.ClientSession] = None, weight_func : Optional[Callable[[float], float]] = None) -> None:
-		print('Fetching clue answers...')
 		owns_session = session is None
+		print('Fetching answers for {} clues...'.format(self.num_entries))
 		clues_lists = self.parse_clues(clues)
 		if owns_session:
 			headers = {
 				'User-Agent': 'queso AppleWebKit/9000 Chrome/9000',
 			}
 			connector = aiohttp.TCPConnector(
-				limit=100, # defualt is 100 simultaneous connections
-				limit_per_host=30,
+				limit=300,
+				limit_per_host=10,
 			)
 			session = aiohttp.ClientSession(headers=headers, connector=connector)
 		assert session is not None
 		tasks = []
-		dm = tqdm.tqdm(total=sum(map(len, self.entries))*len(Tracker))
+		dm = tqdm.tqdm(total=self.num_entries*len(Tracker))
 		for entries, clues_list in zip(self.entries, clues_lists):
 			for entry, clue in zip(entries, clues_list):
 				tasks.append(entry.use_clue(clue, session, weight_for_unknown, weight_func=weight_func, async_tqdm=dm))
@@ -712,3 +748,5 @@ class Board(object):
 		for tracker in Tracker:
 			if tracker.value.expected_answers and not tracker.value.site_gave_answers:
 				warnings.warn('Did not get any answers from {}'.format(tracker.name))
+			if tracker.value.could_not_fetch:
+				print('Skipped {} clues from {}'.format(tracker.value.could_not_fetch, tracker.name))

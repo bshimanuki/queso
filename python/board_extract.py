@@ -150,7 +150,7 @@ def get_square_size(im: np.ndarray) -> Tuple[float, float]:
 	# print(peak_y)
 	# print(peak_x)
 
-	def get_gcd(xs: List[float], init_max_denom: int = 6, init_thresh: float = 1e-1) -> Tuple[float, int]:
+	def get_gcd(xs: List[float], init_max_denom: int = 8, init_thresh: float = 1e-1) -> Tuple[float, int]:
 		'Returns gcd of inliers and number of inliers.'
 		max_denom = init_max_denom
 		thresh = init_thresh
@@ -173,7 +173,6 @@ def get_square_size(im: np.ndarray) -> Tuple[float, float]:
 					f = Fraction(x / val).limit_denominator(int(max_denom))
 				else:
 					f = 1 / Fraction(val / x).limit_denominator(int(max_denom))
-				# print(x, val, float(f), x / val, thresh)
 				if is_approx(float(f), x / val, thresh=thresh):
 					n += 1
 					max_denom **= denom_power_factor

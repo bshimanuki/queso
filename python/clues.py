@@ -11,6 +11,7 @@ import math
 import random
 import re
 import os
+import sys
 from typing import cast, Any, Awaitable, Counter as _Counter, Dict, Iterable, List, Optional, Union
 import urllib.parse
 import warnings
@@ -27,7 +28,31 @@ Scoring ported and extended from crows project at https://github.com/kcaze/crows
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 CACHE_DIR = os.path.join(ROOT, 'cache')
+TIMEOUT_SECONDS = 10
+PROXY_TIMEOUT_SECONDS = 20
 
+async def get_proxy(session : aiohttp.ClientSession, state={}) -> Optional[str]:
+	if not state:
+		state['proxies'] = None
+		state['lock'] = asyncio.Semaphore()
+	if state['proxies'] is None:
+		async with state['lock']:
+			if state['proxies'] is None:
+				url = 'https://api.proxyscrape.com/?request=getproxies&proxytype=http&timeout=1000&country=all&ssl=yes&anonymity=elite'
+				task = session.get(url, timeout=aiohttp.ClientTimeout(total=TIMEOUT_SECONDS))
+				async with task as response:
+					try:
+						doc = await response.text()
+					except:
+						doc = ''
+				state['proxies'] = doc.split()
+	proxy = None
+	if state['proxies']:
+		idx = random.randrange(len(state['proxies']))
+		proxy = 'http://' + state['proxies'][idx % len(state['proxies'])]
+	else:
+		warnings.warn('Could not get a proxies list.')
+	return proxy
 
 async def gather_resolve_dict(d : Dict[Any, Awaitable[Any]]) -> Dict[Any, Any]:
 	'''Resolves futures in dict values. Mutates the dict.'''
@@ -87,15 +112,19 @@ def get_text_ngrams(lines : List[str], values : Optional[Iterable[int]] = None) 
 
 class TrackerBase(abc.ABC):
 	method = None # type: Optional[str]
-	num_trials = 3
+	# num_trials = 3
+	num_trials = 1
 	min_valid_html_length = 1000 # for asserting we aren't getting error responses, valid responses seem to be at least 8k
 	semaphore = AsyncNoop() # type: Union[AsyncNoop, asyncio.Semaphore]
+	# use_proxy = False
+	use_proxy = True
+	parse_json = False
 	# fetch will set to True on fetched resource
 	site_gave_answers = False
 	# subclasses should override
 	expected_answers = True
 	should_run = True
-	timeout = aiohttp.ClientTimeout(total=3) # seconds
+	could_not_fetch = 0
 
 	def __init__(self, clue : str, session : aiohttp.ClientSession, length_guess : int, async_tqdm : Optional[tqdm.tqdm] = None):
 		self.clue = clue
@@ -148,12 +177,12 @@ class TrackerBase(abc.ABC):
 				self.trial = _trial
 				url = self.url()
 				if self.method == 'get':
-					task_maker = lambda: self.session.get(url, timeout=self.timeout)
+					task_maker = lambda **fetch_kwargs: self.session.get(url, **fetch_kwargs)
 					cache_key = self.slugify('-'.join((self.method, url)))
 				else:
 					assert self.method == 'post'
 					formdata = self.formdata()
-					task_maker = lambda: self.session.post(url, data=formdata, timeout=self.timeout)
+					task_maker = lambda **fetch_kwargs: self.session.post(url, data=formdata, **fetch_kwargs)
 					class AsyncStreamWriter():
 						def __init__(self):
 							self.bufs = []
@@ -169,20 +198,59 @@ class TrackerBase(abc.ABC):
 					with open(cache_file, 'rb') as f:
 						doc = f.read().decode('utf-8')
 				else:
-					task = task_maker()
-					async with self.semaphore:
-						try:
-							async with task as response:
-								doc = await response.text()
-							assert(len(doc) >= self.min_valid_html_length)
-						except Exception as e:
-							continue
+					pending = []
+					use_proxy = self.use_proxy
+					if use_proxy:
+						proxy = await get_proxy(self.session)
+						if proxy is None:
+							use_proxy = False
+					num_tasks = 5 if use_proxy else 1
+					for i in range(num_tasks):
+						if use_proxy:
+							proxy = await get_proxy(self.session)
+							timeout = PROXY_TIMEOUT_SECONDS
+						else:
+							proxy = None
+							timeout = TIMEOUT_SECONDS
+						fetch_kwargs = {
+							'timeout': aiohttp.ClientTimeout(total=timeout),
+							'proxy': proxy,
+						}
+						task = task_maker(**fetch_kwargs)
+						pending.append(asyncio.ensure_future(task))
+					semaphore = AsyncNoop() if use_proxy else self.semaphore
+					async with semaphore:
+						while doc is None and pending:
+							done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+							for task in done:
+								try:
+									response = await task
+									_doc = await response.text()
+									assert(len(_doc) >= self.min_valid_html_length)
+									if self.parse_json:
+										# check for valid json
+										json.loads(_doc)
+									doc = _doc
+								except Exception:
+									pass
+						for task in pending:
+							task.cancel()
+							try:
+								await task
+							except:
+								pass
+					if doc is None:
+						# wait and try others before trying again
+						await asyncio.sleep(1)
+					else:
 						os.makedirs(CACHE_DIR, exist_ok=True)
 						with open(cache_file, 'wb') as f:
 							f.write(doc.encode('utf-8'))
-				return doc
+				if doc is not None:
+					return doc
 			# could not get resource
 			warnings.warn('Failed connection to {} after {} tries... skipping'.format(self.__class__.__name__, self.num_trials))
+			self.__class__.could_not_fetch += 1
 			return ''
 		finally:
 			if self.async_tqdm is not None:
@@ -237,11 +305,12 @@ class Tracker(enum.Enum):
 		NB: This is nondeterministic because ACROSSNDOWN removes spaces.
 		'''
 		method = 'get'
-		num_trials = 4 # try each site twice
+		num_trials = 2 # try each site once (with multiple proxies each)
 		min_valid_html_length = 20000 # server outage is about 15k, valid response is about 150k
+		use_proxy = True
 		sites = [
-			('https://www.wordplays.com/crossword-solver/{}', asyncio.Semaphore(12)),
-			('http://www.acrossndown.com/crosswords/clues/{}', asyncio.Semaphore(12)),
+			('https://www.wordplays.com/crossword-solver/{}', asyncio.Semaphore(6)),
+			('http://www.acrossndown.com/crosswords/clues/{}', asyncio.Semaphore(6)),
 		]
 		star_tag = r'<div></div>'
 		regex = re.compile(r'<tr[^>]*>\s*<td><div class=stars>((?:{})*)</div><div class=clear></div></td><td><a[^>]*>([\w\s]+)</a>'.format(star_tag))
@@ -322,7 +391,7 @@ class Tracker(enum.Enum):
 	class ONEACROSS(TrackerBase):
 		# TODO: determine if needs to be rate limited
 		method = 'get'
-		semaphore = asyncio.Semaphore(20)
+		semaphore = asyncio.Semaphore(10)
 		dot = '<img[^>]* src=[^>]*dot[^>]*>'
 		star = '<img[^>]* src=[^>]*star[^>]*>'
 		regex = re.compile('<tr>\s*<td[^>]*>\s*(?:{}\s*)*(({}\s*)*)</td>\s*<td[^>]*>\s*<tt>\s*<a[^>]*>([^<]*)</a>'.format(dot, star))
@@ -400,27 +469,25 @@ class Tracker(enum.Enum):
 		semaphore = asyncio.Semaphore(15)
 		regex_word = re.compile(r'[A-Za-z]+')
 		min_valid_html_length = 100 # json responses are short, especially when empty
+		parse_json = True
 		def url(self) -> str:
 			return 'http://suggestqueries.google.com/complete/search?client=chrome&q={}'.format(self.url_clue())
 		async def _get_scores(self, doc : str) -> Dict[str, float]:
 			answer_scores = {} # Dict[str, float]
 			completions = []
-			try:
-				query, results, _, _, extra = json.loads(doc) # type: ignore # mypy does not handle underscore # str, List[str], Any, Any, Dict[str, Any]
-				results_relevance = extra['google:suggestrelevance'] # values in the hundreds and thousands
-				query_relevance = extra['google:verbatimrelevance'] # values in the hundreds and thousands
-				query = normalize_unicode(query).lower()
-				query_words = self.regex_word.findall(query)
-				for result in results:
-					result = normalize_unicode(result).lower()
-					for word  in query_words:
-						result = result.replace(word, '', 1)
-					completions.append(result)
-				completions_counter = get_text_ngrams(completions, values=results_relevance)
-				for answer, count in completions_counter.items():
-					answer_scores[answer] = max(1, math.log2(count / 100))
-			except:
-				pass
+			query, results, _, _, extra = json.loads(doc) # type: ignore # mypy does not handle underscore # str, List[str], Any, Any, Dict[str, Any]
+			results_relevance = extra.get('google:suggestrelevance', [500 for result in results]) # values in the hundreds and thousands
+			query_relevance = extra.get('google:verbatimrelevance', 500) # values in the hundreds and thousands
+			query = normalize_unicode(query).lower()
+			query_words = self.regex_word.findall(query)
+			for result in results:
+				result = normalize_unicode(result).lower()
+				for word  in query_words:
+					result = result.replace(word, '', 1)
+				completions.append(result)
+			completions_counter = get_text_ngrams(completions, values=results_relevance)
+			for answer, count in completions_counter.items():
+				answer_scores[answer] = max(1, math.log2(count / 100))
 			return answer_scores
 
 	class GOOGLE_FILL_IN_THE_BLANK(GOOGLE):
