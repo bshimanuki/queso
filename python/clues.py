@@ -51,7 +51,7 @@ async def get_proxy(session : aiohttp.ClientSession, state={}) -> Optional[str]:
 		idx = random.randrange(len(state['proxies']))
 		proxy = 'http://' + state['proxies'][idx % len(state['proxies'])]
 	else:
-		warnings.warn('Could not get a proxies list.')
+		warnings.warn('Could not get a proxies list. Fetching resources directly.')
 	return proxy
 
 async def gather_resolve_dict(d : Dict[Any, Awaitable[Any]]) -> Dict[Any, Any]:
@@ -112,19 +112,18 @@ def get_text_ngrams(lines : List[str], values : Optional[Iterable[int]] = None) 
 
 class TrackerBase(abc.ABC):
 	method = None # type: Optional[str]
-	# num_trials = 3
-	num_trials = 1
+	num_trials = 3
 	min_valid_html_length = 1000 # for asserting we aren't getting error responses, valid responses seem to be at least 8k
 	semaphore = AsyncNoop() # type: Union[AsyncNoop, asyncio.Semaphore]
-	# use_proxy = False
 	use_proxy = True
 	parse_json = False
-	# fetch will set to True on fetched resource
-	site_gave_answers = False
+	site_gave_answers = False # fetch will set to True on fetched resource
+	proxy_num_tasks = 5 # number of proxies to try for each clue
+	redundant_fetch = False # set to True if redundant for parent class
 	# subclasses should override
 	expected_answers = True
-	should_run = True
-	could_not_fetch = 0
+	should_run = True # set to False if the query should not be run (eg, filters don't apply)
+	could_not_fetch = 0 # incremented when a fetch fails
 
 	def __init__(self, clue : str, session : aiohttp.ClientSession, length_guess : int, async_tqdm : Optional[tqdm.tqdm] = None):
 		self.clue = clue
@@ -174,6 +173,8 @@ class TrackerBase(abc.ABC):
 			if not self.should_run:
 				return ''
 			for _trial in range(self.num_trials):
+				if self.use_proxy and _trial > 0:
+					break
 				self.trial = _trial
 				url = self.url()
 				if self.method == 'get':
@@ -199,14 +200,13 @@ class TrackerBase(abc.ABC):
 						doc = f.read().decode('utf-8')
 				else:
 					pending = []
-					use_proxy = self.use_proxy
-					if use_proxy:
+					if self.use_proxy:
 						proxy = await get_proxy(self.session)
 						if proxy is None:
-							use_proxy = False
-					num_tasks = 5 if use_proxy else 1
+							self.use_proxy = False
+					num_tasks = self.proxy_num_tasks if self.use_proxy else 1
 					for i in range(num_tasks):
-						if use_proxy:
+						if self.use_proxy:
 							proxy = await get_proxy(self.session)
 							timeout = PROXY_TIMEOUT_SECONDS
 						else:
@@ -218,7 +218,7 @@ class TrackerBase(abc.ABC):
 						}
 						task = task_maker(**fetch_kwargs)
 						pending.append(asyncio.ensure_future(task))
-					semaphore = AsyncNoop() if use_proxy else self.semaphore
+					semaphore = AsyncNoop() if self.use_proxy else self.semaphore
 					async with semaphore:
 						while doc is None and pending:
 							done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
@@ -231,7 +231,7 @@ class TrackerBase(abc.ABC):
 										# check for valid json
 										json.loads(_doc)
 									doc = _doc
-								except Exception:
+								except:
 									pass
 						for task in pending:
 							task.cancel()
@@ -259,9 +259,9 @@ class TrackerBase(abc.ABC):
 
 class Tracker(enum.Enum):
 	@classmethod
-	async def get_scores_by_tracker(cls, clue : str, session : aiohttp.ClientSession, length_guess : int, trackers : Optional[Iterable['Tracker']] = None, async_tqdm : Optional[tqdm.tqdm] = None) -> Dict[str, Dict[str, float]]:
+	async def get_scores_by_tracker(cls, clue : str, session : aiohttp.ClientSession, length_guess : int, trackers : Optional[Iterable['Tracker']] = None, async_tqdm : Optional[tqdm.tqdm] = None) -> Dict[Any, Dict[str, float]]:
 		scores = {
-			tracker.name: tracker.value(clue, session, length_guess, async_tqdm=async_tqdm).get_scores()
+			tracker.value: tracker.value(clue, session, length_guess, async_tqdm=async_tqdm).get_scores()
 			for tracker in (cls if trackers is None else trackers) # type: ignore # mypy does not recognize enums
 		}
 		tracker_scores = await gather_resolve_dict(scores)
@@ -272,11 +272,12 @@ class Tracker(enum.Enum):
 		'''Aggregate trackers and reduce by sum.'''
 		tracker_scores = await cls.get_scores_by_tracker(clue, session, length_guess, async_tqdm=async_tqdm)
 		scores = defaultdict(float) # type: Dict[str, float]
-		for _scores in tracker_scores.values():
+		for tracker, _scores in tracker_scores.items():
+			# skip redundant trackers whose parent have results
+			if tracker.redundant_fetch and tracker_scores[tracker.__bases__[0]]:
+				continue
 			for key, value in _scores.items():
 				scores[key] += value
-		# for key, value in scores.items():
-			# scores[key] = math.sqrt(value)
 		return scores
 
 
@@ -302,40 +303,37 @@ class Tracker(enum.Enum):
 		WORDPLAYS and ACROSSNDOWN use the same server. Both sites limit the number of actie connections.
 		Requires user agent to be set to non-default.
 
-		NB: This is nondeterministic because ACROSSNDOWN removes spaces.
+		NB: The only difference in results is ACROSSNDOWN removes spaces.
 		'''
 		method = 'get'
-		num_trials = 2 # try each site once (with multiple proxies each)
+		num_trials = 2
 		min_valid_html_length = 20000 # server outage is about 15k, valid response is about 150k
-		use_proxy = True
+		semaphore = asyncio.Semaphore(6)
 		sites = [
 			('https://www.wordplays.com/crossword-solver/{}', asyncio.Semaphore(6)),
 			('http://www.acrossndown.com/crosswords/clues/{}', asyncio.Semaphore(6)),
 		]
 		star_tag = r'<div></div>'
 		regex = re.compile(r'<tr[^>]*>\s*<td><div class=stars>((?:{})*)</div><div class=clear></div></td><td><a[^>]*>([\w\s]+)</a>'.format(star_tag))
-		@property
-		def semaphore(self):
-			return self.sites[self.index][1]
-		@property
-		def index(self):
-			return (self.trial + self.trial_offset) % len(self.sites)
-		def __init__(self, clue : str, session : aiohttp.ClientSession, length_guess : int, async_tqdm : Optional[tqdm.tqdm] = None):
-			super().__init__(clue, session, length_guess, async_tqdm=async_tqdm)
-			self.trial_offset = random.randrange(len(self.sites))
 		def url(self) -> str:
-			site = self.sites[self.index][0]
-			return site.format(self.url_clue(dash=True))
+			return 'https://www.wordplays.com/crossword-solver/{}'.format(self.url_clue(dash=True))
 		async def _get_scores(self, doc : str) -> Dict[str, float]:
 			answer_scores = {} # type: Dict[str, float]
 			matches = self.regex.findall(doc)
 			for match in matches:
 				star_tags, answer = match
 				stars = round(len(star_tags) / len(self.star_tag))
-				# value = 1 if stars >= 4 else 0
 				value = stars
 				answer_scores[answer] = value
 			return answer_scores
+
+	class ACROSSNDOWN(WORDPLAYS):
+		semaphore = asyncio.Semaphore(6)
+		@property
+		def redundant_fetch(self): # property because of class definition ordering
+			return WORDPLAYS
+		def url(self) -> str:
+			return 'http://www.acrossndown.com/crosswords/clues/{}'.format(self.url_clue(dash=True))
 
 	class CROSSWORDHEAVEN(TrackerBase):
 		method = 'get'
@@ -475,19 +473,23 @@ class Tracker(enum.Enum):
 		async def _get_scores(self, doc : str) -> Dict[str, float]:
 			answer_scores = {} # Dict[str, float]
 			completions = []
-			query, results, _, _, extra = json.loads(doc) # type: ignore # mypy does not handle underscore # str, List[str], Any, Any, Dict[str, Any]
-			results_relevance = extra.get('google:suggestrelevance', [500 for result in results]) # values in the hundreds and thousands
-			query_relevance = extra.get('google:verbatimrelevance', 500) # values in the hundreds and thousands
-			query = normalize_unicode(query).lower()
-			query_words = self.regex_word.findall(query)
-			for result in results:
-				result = normalize_unicode(result).lower()
-				for word  in query_words:
-					result = result.replace(word, '', 1)
-				completions.append(result)
-			completions_counter = get_text_ngrams(completions, values=results_relevance)
-			for answer, count in completions_counter.items():
-				answer_scores[answer] = max(1, math.log2(count / 100))
+			try:
+				query, results, _, _, extra = json.loads(doc) # type: ignore # mypy does not handle underscore # str, List[str], Any, Any, Dict[str, Any]
+			except:
+				pass
+			else:
+				results_relevance = extra.get('google:suggestrelevance', [500 for result in results]) # values in the hundreds and thousands
+				query_relevance = extra.get('google:verbatimrelevance', 500) # values in the hundreds and thousands
+				query = normalize_unicode(query).lower()
+				query_words = self.regex_word.findall(query)
+				for result in results:
+					result = normalize_unicode(result).lower()
+					for word  in query_words:
+						result = result.replace(word, '', 1)
+					completions.append(result)
+				completions_counter = get_text_ngrams(completions, values=results_relevance)
+				for answer, count in completions_counter.items():
+					answer_scores[answer] = max(1, math.log2(count / 100))
 			return answer_scores
 
 	class GOOGLE_FILL_IN_THE_BLANK(GOOGLE):
@@ -519,4 +521,4 @@ if __name__ == '__main__':
 	loop.close()
 	result = answer_scores[0]
 	for tracker, values in result.items():
-		print(tracker, values)
+		print(tracker.name, values)

@@ -739,7 +739,12 @@ class Board(object):
 			for entry, clue in zip(entries, clues_list):
 				tasks.append(entry.use_clue(clue, session, weight_for_unknown, weight_func=weight_func, async_tqdm=dm))
 		loop = asyncio.get_event_loop()
-		answer_scores = loop.run_until_complete(asyncio.gather(*tasks))
+		try:
+			answer_scores = loop.run_until_complete(asyncio.gather(*tasks))
+		except asyncio.CancelledError:
+			import sys
+			print(sys.exc_info())
+			raise
 		if owns_session:
 			loop.run_until_complete(session.close())
 		loop.close()
