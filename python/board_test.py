@@ -15,13 +15,13 @@ from clipboard_qt import set_clipboard
 
 if __name__ == '__main__':
     root = os.path.dirname(os.path.dirname(__file__))
-    # puzzle = 'smogon'
+    puzzle = 'smogon'
     # puzzle = 'Oct2219'
     # puzzle = 'mashup'
     # puzzle = 'cross'
     # puzzle = 'caged'
     # puzzle = 'pollination-a'
-    puzzle = 'pollination-b'
+    # puzzle = 'pollination-b'
 
     impath = '{}.png'.format(puzzle)
     clues_file = os.path.join(root, 'test_cases', '{}-clues.txt'.format(puzzle))

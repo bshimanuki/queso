@@ -59,11 +59,11 @@ def marginalize_trigram(
 ) -> np.ndarray:
 	num = sum(1 for x in (prepre, pre, post, postpost) if x is not None)
 	if num == 0:
-		p = ngram.unigram
+		p = ngram.unigram(boundaries=True)
 	elif num == 1:
-		p = ngram.bigram
+		p = ngram.bigram(boundaries=True)
 	elif num == 2:
-		p = ngram.trigram
+		p = ngram.trigram(boundaries=True)
 	else:
 		raise ValueError('too many parameters for marginalizing a trigram')
 	if prepre is not None:
@@ -239,8 +239,10 @@ class Square(object):
 					assert index is not None
 
 					surrounding = [
-						entry.cells[i].p[1 - direction] # type: ignore # forward reference
+						np.pad(entry.cells[i].p[1 - direction], (0, ngram.n_extra)) # type: ignore # forward reference
 						if i >= 0 and i < len(entry)
+						else ngram.ONE_HOT_START if i == -1
+						else ngram.ONE_HOT_END if i == len(entry)
 						else None
 						for i in range(index - 2, index + 3)
 						if i != index
@@ -250,7 +252,7 @@ class Square(object):
 					answer_ps = np.array(entry.p)
 					for i, answer in enumerate(entry.answers):
 						if answer is None:
-							answer_ps[i] /= np.dot(self.p[1 - direction], ngram.uniform)
+							answer_ps[i] /= np.dot(self.p[1 - direction], ngram.uniform())
 						else:
 							answer_ps[i] /= self.p[1 - direction, answer[index]]
 					answer_ps /= answer_ps.sum()
@@ -258,8 +260,10 @@ class Square(object):
 					self.p_next[direction] = 0
 					for answer, answer_p in zip(entry.answers, answer_ps):
 						if answer is None:
-							# TODO: trigram factors
-							self.p_next[direction] += answer_p * marginalize_trigram_smoothed(*surrounding)
+							# restrict to alpha and normalize
+							p = marginalize_trigram_smoothed(*surrounding)[:ngram.n_alpha]
+							p /= p.sum()
+							self.p_next[direction] += answer_p * p
 						else:
 							self.p_next[direction, answer[index]] += answer_p
 					self.p_next[direction] /= self.p_next[direction].sum()
@@ -351,15 +355,15 @@ class Entry(object):
 		self.p[...] = self.scores
 		for i, answer in enumerate(self.answers):
 			if answer is None:
-				# self.p[i] *= np.prod(self.p_cells @ ngram.unigram)
-				self.p[i] *= np.prod(self.p_cells @ ngram.uniform)
+				# self.p[i] *= np.prod(self.p_cells @ ngram.unigram())
+				self.p[i] *= np.prod(self.p_cells @ ngram.uniform())
 				# if len(self.p_cells) == 1:
-					# self.p[i] *= ngram.unigram @ self.p_cells[0]
+					# self.p[i] *= ngram.unigram() @ self.p_cells[0]
 				# elif len(self.p_cells) > 1:
-					# self.p[i] *= (ngram.bigram @ self.p_cells[1] @ self.p_cells[0]) ** (1 / 2)
-					# self.p[i] *= (ngram.bigram @ self.p_cells[-1] @ self.p_cells[-2]) ** (1 / 2)
+					# self.p[i] *= (ngram.bigram() @ self.p_cells[1] @ self.p_cells[0]) ** (1 / 2)
+					# self.p[i] *= (ngram.bigram() @ self.p_cells[-1] @ self.p_cells[-2]) ** (1 / 2)
 					# for j in range(len(self.p_cells) - 2):
-						# self.p[i] *= (ngram.trigram @ self.p_cells[j+2] @ self.p_cells[j+1] @ self.p_cells[j]) ** (1 / 3)
+						# self.p[i] *= (ngram.trigram() @ self.p_cells[j+2] @ self.p_cells[j+1] @ self.p_cells[j]) ** (1 / 3)
 			else:
 				self.p[i] *= np.prod(np.choose(answer, self.p_cells.T))
 		self.p /= self.p.sum()
@@ -395,8 +399,8 @@ class Board(object):
 		assert bar_right.shape == cells.shape
 
 		self.cells = cells
-		self.p_cells = np.tile(ngram.unigram[np.newaxis, np.newaxis, np.newaxis, :], self.shape + (2, 1)) # y, x, direction, letter
-		self.p_cells_next = np.tile(ngram.unigram[np.newaxis, np.newaxis, np.newaxis, :], self.shape + (2, 1)) # y, x, direction, letter
+		self.p_cells = np.tile(ngram.unigram()[np.newaxis, np.newaxis, np.newaxis, :], self.shape + (2, 1)) # y, x, direction, letter
+		self.p_cells_next = np.tile(ngram.unigram()[np.newaxis, np.newaxis, np.newaxis, :], self.shape + (2, 1)) # y, x, direction, letter
 		self.background = background
 		self.bar_below = bar_below
 		self.bar_right = bar_right
@@ -535,18 +539,19 @@ class Board(object):
 				entries = self.entries[direction]
 				if entry_i == 0:
 					style = 'style="font-weight:bold;"'
-					for header in ('LEN', 'ANSWER', '#', direction.name):
+					for header in ('LEN', 'ANSWER', 'p', '#', direction.name):
 						strings.append('<td {}>{}</td>'.format(style, header))
 					return ''.join(strings)
 				entry_i -= 1
 				if entry_i < len(entries):
 					entry = entries[entry_i]
-					principal, *rest = map(operator.itemgetter(1), sorted(zip(entry.p, (answer if answer is None else to_str(answer) for answer in entry.answers)), reverse=True))
+					principal, *rest = sorted(zip(entry.p, (answer if answer is None else to_str(answer) for answer in entry.answers)), reverse=True)
 					strings.append('<td>{}</td>'.format(len(entry) or ''))
-					strings.append('<td>{}</td>'.format(principal or ''))
+					strings.append('<td>{}</td>'.format(principal[1] or ''))
+					strings.append('<td>{}</td>'.format(principal[0] or ''))
 					strings.append('<td>{}</td>'.format(entry.number or ''))
 					strings.append('<td>{}</td>'.format(entry.clue or ''))
-					for answer in rest:
+					for p, answer in rest:
 						if answer is not None:
 							strings.append('<td>{}</td>'.format(answer))
 					return ''.join(strings)
@@ -749,5 +754,5 @@ class Board(object):
 		for tracker in Tracker:
 			if tracker.value.expected_answers and not tracker.value.site_gave_answers:
 				warnings.warn('Did not get any answers from {}'.format(tracker.name))
-			if tracker.value.could_not_fetch:
-				print('Skipped {} clues from {}'.format(tracker.value.could_not_fetch, tracker.name))
+			if tracker.value.fetch_fail:
+				print('Skipped {} clues from {} (got {})'.format(tracker.value.fetch_fail, tracker.name, tracker.value.fetch_success))

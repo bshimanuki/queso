@@ -8,8 +8,10 @@ def answerize(answer: str) -> str:
 	answer = answer.upper()
 	return ''.join(c for c in answer if c.isalpha())
 
-def to_uint(answer: str) -> np.ndarray:
+def to_uint(answer: str, boundaries : bool = False) -> np.ndarray:
 	ret = np.fromstring(answer, dtype=np.uint8) - ord('A')
+	if boundaries:
+		ret = np.concatenate(([26], ret, [27]), axis=-1)
 	return ret
 
 def to_str(answer: np.ndarray) -> str:

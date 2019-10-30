@@ -118,13 +118,14 @@ class TrackerBase(abc.ABC):
 	semaphore = AsyncNoop() # type: Union[AsyncNoop, asyncio.Semaphore]
 	use_proxy = True
 	parse_json = False
-	site_gave_answers = False # fetch will set to True on fetched resource
+	site_gave_answers = False # fetch will set to True on returned results
 	proxy_num_tasks = 5 # number of proxies to try for each clue
 	redundant_fetch = False # set to True if redundant for parent class
 	# subclasses should override
 	expected_answers = True
 	should_run = True # set to False if the query should not be run (eg, filters don't apply)
-	could_not_fetch = 0 # incremented when a fetch fails
+	fetch_fail = 0 # incremented when a fetch fails
+	fetch_success = 0 # incremented when a fetch succeeds
 
 	def __init__(self, clue : str, session : aiohttp.ClientSession, length_guess : int, async_tqdm : Optional[tqdm.tqdm] = None):
 		self.clue = clue
@@ -247,6 +248,7 @@ class TrackerBase(abc.ABC):
 							# wait and try others before trying again
 							await asyncio.sleep(1)
 					else:
+						self.__class__.fetch_success += 1
 						os.makedirs(CACHE_DIR, exist_ok=True)
 						with open(cache_file, 'wb') as f:
 							f.write(doc.encode('utf-8'))
@@ -254,7 +256,7 @@ class TrackerBase(abc.ABC):
 					return doc
 			# could not get resource
 			warnings.warn('Failed connection to {} after {} tries... skipping'.format(self.__class__.__name__, trial))
-			self.__class__.could_not_fetch += 1
+			self.__class__.fetch_fail += 1
 			return ''
 		finally:
 			if self.async_tqdm is not None:
@@ -333,6 +335,9 @@ class Tracker(enum.Enum):
 
 	class ACROSSNDOWN(WORDPLAYS):
 		semaphore = asyncio.Semaphore(6)
+		# class counts
+		fetch_fail = 0 # needs to have separate count from WORDPLAYS
+		fetch_success = 0 # needs to have separate count from WORDPLAYS
 		@property
 		def redundant_fetch(self): # property because of class definition ordering
 			return WORDPLAYS
@@ -499,6 +504,9 @@ class Tracker(enum.Enum):
 	class GOOGLE_FILL_IN_THE_BLANK(GOOGLE):
 		regex_blank = re.compile(r'_+')
 		expected_answers = False
+		# class counts
+		fetch_fail = 0 # needs to have separate count from GOOGLE
+		fetch_success = 0 # needs to have separate count from GOOGLE
 		@property
 		def should_run(self):
 			return '_' in self.clue
