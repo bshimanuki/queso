@@ -407,6 +407,7 @@ class Board(object):
 
 		self.grid = np.array([[Square(self, y, x) for x in range(self.shape[1])] for y in range(self.shape[0])])
 		self.entries = [[], []] # type: List[List[Entry]]
+		self.has_clues = False
 
 		possibly_numbered_cells = np.zeros_like(cells)
 		possibly_numbered_cells |= np.insert(np.logical_not(cells), 0, True, axis=0)[:-1]
@@ -656,6 +657,7 @@ class Board(object):
 				answers = [None] + list(answers)
 				scores = [weight_for_unknown] + list(scores)
 				entry.set_answers(answers, scores, clue=clue)
+		self.has_clues = True
 
 	def update_cells(self) -> None:
 		for row in self.grid:
@@ -756,3 +758,4 @@ class Board(object):
 				warnings.warn('Did not get any answers from {}'.format(tracker.name))
 			if tracker.value.fetch_fail:
 				print('Skipped {} clues from {} (got {})'.format(tracker.value.fetch_fail, tracker.name, tracker.value.fetch_success))
+		self.has_clues = True

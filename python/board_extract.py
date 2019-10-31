@@ -11,7 +11,6 @@ import scipy.signal
 import skimage
 
 from board import Board
-from clipboard_qt import set_clipboard
 
 from typing import cast, Any, Dict, List, Optional, Tuple
 
@@ -546,6 +545,8 @@ def make_board(im : np.ndarray) -> Board:
 if __name__ == '__main__':
 	import os
 	import sys
+	from clipboard_qt import set_clipboard
+
 	root = os.path.dirname(os.path.dirname(__file__))
 	impath = 'wild.png'
 	# impath = 'wild_big.png'
