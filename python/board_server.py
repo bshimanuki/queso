@@ -4,13 +4,12 @@ import signal
 import sys
 from typing import Optional
 
-from PyQt5.Qt import QApplication
 import imageio
 import numpy as np
 
 from board import Board
 from board_extract import make_board
-from clipboard_qt import get_clipboard, set_clipboard
+from clipboard_qt import get_application, get_clipboard, set_clipboard
 
 
 class Session(object):
@@ -45,7 +44,7 @@ class Session(object):
 		self.weight_func = lambda x: x ** 2
 
 		# clipboard variables
-		self.app = QApplication([])
+		self.app = get_application()
 		self.clip = self.app.clipboard()
 		self.clip.dataChanged.connect(self.check_clipboard)
 
@@ -135,12 +134,12 @@ class Session(object):
 			set_clipboard(html=output)
 
 	def check_clipboard(self) -> None:
-		application = get_clipboard('text/application', app=self.app)
+		application = get_clipboard('text/application')
 		if application == b'queso':
 			# don't respond to ourselves
 			return
-		img_data = get_clipboard('image/png', app=self.app)
-		text_data = get_clipboard('text/plain', app=self.app)
+		img_data = get_clipboard('image/png')
+		text_data = get_clipboard('text/plain')
 		if img_data:
 			with open(self.image_file, 'wb') as f:
 				f.write(img_data)
@@ -163,7 +162,7 @@ class Session(object):
 		self.set_output()
 
 
-if __name__ == '__main__':
+def main():
 	signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 	parser = argparse.ArgumentParser()
@@ -190,3 +189,7 @@ if __name__ == '__main__':
 	session.run()
 	session.set_output()
 	session.app.exec_()
+
+
+if __name__ == '__main__':
+	main()
