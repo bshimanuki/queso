@@ -637,7 +637,7 @@ class Board(object):
 		clues = {} # type: Dict[str, Optional[str]]
 		for line in data.split('\n'):
 			if ':' in line:
-				entry_name, clue = line.split(':')
+				entry_name, clue = line.split(':', 1)
 				clue = clue.strip()
 				clues[entry_name] = clue if clue else None
 			else:
@@ -750,7 +750,6 @@ class Board(object):
 		loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
 		if owns_session:
 			loop.run_until_complete(session.close())
-		loop.close()
 		dm.close()
 		print('Fetched clue answers!')
 		for tracker in Tracker:

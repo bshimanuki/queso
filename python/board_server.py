@@ -1,7 +1,10 @@
 import argparse
+import asyncio
 import os
+import queue
 import signal
 import sys
+import threading
 from typing import Optional
 
 import imageio
@@ -10,6 +13,38 @@ import numpy as np
 from board import Board
 from board_extract import make_board
 from clipboard_qt import get_application, get_clipboard, set_clipboard
+
+
+class QueueItem(object):
+	def __init__(
+			self,
+			img : Optional[np.ndarray] = None,
+			clues : Optional[str] = None,
+			entries : Optional[str] = None,
+			loading_mode : bool = False,
+	):
+		self.img = img
+		self.clues = clues
+		self.entries = entries
+		self.loading_mode = loading_mode
+
+	@staticmethod
+	def equal(a, b):
+		if a.__class__ != b.__class__:
+			return False
+		if isinstance(a, np.ndarray):
+			return (a == b).all()
+		return a == b
+
+	def __eq__(self, other):
+		if self.__class__ != other.__class__:
+			return False
+		if self.__dict__.keys() != other.__dict__.keys():
+			return False
+		for key in self.__dict__:
+			if not self.equal(self.__dict__[key], other.__dict__[key]):
+				return False
+		return True
 
 
 class Session(object):
@@ -30,6 +65,7 @@ class Session(object):
 		# state variables
 		self.board = None
 		self.clues = None
+		self.entries = None
 
 		# file name variables
 		self._image_file = image_file
@@ -47,6 +83,9 @@ class Session(object):
 		self.app = get_application()
 		self.clip = self.app.clipboard()
 		self.clip.dataChanged.connect(self.check_clipboard)
+		self.queue = queue.Queue()
+		self.thread = threading.Thread(target=self.handle, daemon=True)
+		self.thread.start()
 
 	@property
 	def image_file(self) -> str:
@@ -64,6 +103,38 @@ class Session(object):
 	def output_file(self) -> str:
 		return self._output_file or self.OUTPUT_FILE
 
+	def set_image(self, img, loading_mode=False) -> None:
+		self.board = make_board(img)
+		self.set_output()
+		self.solve_board(loading_mode=loading_mode)
+
+	def set_clues(self, clues, loading_mode=False) -> None:
+		self.clues = clues
+		self.solve_board(loading_mode=loading_mode)
+
+	def set_entries(self, entries, loading_mode=False) -> None:
+		self.entries = entries
+		with open(self.entries_file, 'wb') as f:
+			f.write(self.entries.encode('utf-8'))
+		if self.clues is None:
+			self.solve_board(loading_mode=loading_mode)
+
+	def solve_board(self, loading_mode=False) -> None:
+		updated = False
+		if self.board is not None:
+			if self.entries is not None:
+				if loading_mode and not self.board.has_clues:
+					self.board.load_entries(self.entries, weight_for_unknown=self.weight_for_unknown)
+					updated = True
+			if self.clues is not None:
+				if not loading_mode or not self.board.has_clues:
+					self.board.use_clues(self.clues, weight_for_unknown=self.weight_for_unknown, weight_func=self.weight_func)
+					self.set_entries(self.board.dump_entries(), loading_mode=loading_mode)
+					updated = True
+		if updated:
+			self.run()
+			self.set_output()
+
 	def load_image(self, raise_not_exist : bool = False) -> None:
 		fname = self.image_file
 		try:
@@ -73,7 +144,7 @@ class Session(object):
 				raise
 		else:
 			sys.stderr.write('Loaded {}\n'.format(fname))
-			self.board = make_board(img)
+			self.queue.put(QueueItem(img=img, loading_mode=True))
 
 	def load_clues(self, raise_not_exist : bool = False) -> None:
 		fname = self.clues_file
@@ -85,7 +156,7 @@ class Session(object):
 				raise
 		else:
 			sys.stderr.write('Loaded {}\n'.format(fname))
-			self.clues = clues
+			self.queue.put(QueueItem(clues=clues, loading_mode=True))
 
 	def load_entries(self, raise_not_exist : bool = False) -> None:
 		fname = self.entries_file
@@ -97,22 +168,16 @@ class Session(object):
 				raise
 		else:
 			sys.stderr.write('Loaded {}\n'.format(fname))
-			self.entries = entries
+			self.queue.put(QueueItem(entries=entries, loading_mode=True))
 
 	def load(self) -> None:
 		self.load_image()
-		self.load_clues()
 		self.load_entries()
-		if self.board is not None:
-			if self.use_entries and self.entries is not None:
-				self.board.load_entries(self.entries, weight_for_unknown=self.weight_for_unknown)
-			elif self.clues is not None:
-				self.board.use_clues(self.clues, weight_for_unknown=self.weight_for_unknown, weight_func=self.weight_func)
-				with open(self.entries_file, 'wb') as f:
-					f.write(self.board.dump_entries().encode('utf-8'))
+		self.load_clues()
 
 	def run(self) -> None:
 		if self.board is not None and self.board.has_clues:
+			sys.stderr.write('Running bayesian model...\n')
 			for _ in range(self.iterations):
 				self.board.update_cells()
 				self.board.update_entries()
@@ -123,10 +188,10 @@ class Session(object):
 		if self.board is not None:
 			if self.board.has_clues:
 				output = self.board.format_multiple()
-				sys.stderr.write('Copying filled grids\n')
+				sys.stderr.write('Copied filled grids to clipboard!\n')
 			else:
 				output = self.board.format(show_entries=False)
-				sys.stderr.write('Copying empty grid\n')
+				sys.stderr.write('Copied empty grid to clipboard!\n')
 
 		if output is not None:
 			with open(self.output_file, 'wb') as f:
@@ -140,26 +205,34 @@ class Session(object):
 			return
 		img_data = get_clipboard('image/png')
 		text_data = get_clipboard('text/plain')
+		img = None
 		if img_data:
 			with open(self.image_file, 'wb') as f:
 				f.write(img_data)
 			img = imageio.imread(img_data)
-			self.board = make_board(img)
+			sys.stderr.write('Received image: {} bytes\n'.format(len(img_data)))
 		elif text_data:
 			with open(self.clues_file, 'wb') as f:
 				f.write(text_data)
-			self.clues = text_data.decode('utf-8')
-		else:
-			# nothing recognized
-			return
+			sys.stderr.write('Received text: {} bytes\n'.format(len(text_data)))
+		self.queue.put(QueueItem(img=img, clues=text_data.decode('utf-8')))
 
-		output = None # type: Optional[str]
-		if self.board is not None and self.clues is not None:
-			self.board.use_clues(self.clues, weight_for_unknown=self.weight_for_unknown, weight_func=self.weight_func)
-			with open(self.entries_file, 'wb') as f:
-				f.write(self.board.dump_entries().encode('utf-8'))
-			self.run()
-		self.set_output()
+	def handle(self) -> None:
+		asyncio.set_event_loop(asyncio.new_event_loop())
+		last_qi = None
+		while True:
+			qi = self.queue.get()
+			if qi == last_qi:
+				# don't run if nothing has changed
+				sys.stderr.write('Clipboard contents have not changed, skipping...\n')
+				continue
+			if qi.img is not None:
+				self.set_image(qi.img, loading_mode=qi.loading_mode)
+			elif qi.clues:
+				self.set_clues(qi.clues, loading_mode=qi.loading_mode)
+			elif qi.entries:
+				self.set_entries(qi.entries, loading_mode=qi.loading_mode)
+			last_qi = qi
 
 
 def main():
@@ -186,8 +259,6 @@ def main():
 		session.check_clipboard()
 	else:
 		session.load()
-	session.run()
-	session.set_output()
 	session.app.exec_()
 
 
