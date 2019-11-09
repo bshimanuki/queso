@@ -14,9 +14,9 @@ import numpy as np
 import skimage
 import tqdm
 
-from clues import Tracker
+from clues import Proxy, Tracker
 from ngram import ngram
-from utils import answerize, to_str, to_uint
+from utils import answerize, to_str, to_uint, BoardError
 
 '''
 Represent a crossword board and fill it in with belief propagagrion using a markov random field model.
@@ -337,8 +337,8 @@ class Entry(object):
 		self.scores = np.asarray(scores, dtype=np.float)
 		self.p = self.scores / self.scores.sum()
 
-	async def use_clue(self, clue : str, session : aiohttp.ClientSession, weight_for_unknown : float, weight_func : Optional[Callable[[float], float]] = None, async_tqdm : tqdm.tqdm = None) -> None:
-		answer_scores = await Tracker.aggregate_scores(clue, session, len(self), async_tqdm=async_tqdm)
+	async def use_clue(self, clue : str, session : aiohttp.ClientSession, proxy : Proxy, weight_for_unknown : float, weight_func : Optional[Callable[[float], float]] = None, async_tqdm : tqdm.tqdm = None) -> None:
+		answer_scores = await Tracker.aggregate_scores(clue, session, proxy, len(self), async_tqdm=async_tqdm)
 		answers = [None] # type: List[Optional[str]]
 		weights = [weight_for_unknown]
 		for answer, score in answer_scores.items():
@@ -649,7 +649,7 @@ class Board(object):
 		for entries in self.entries:
 			for entry in entries:
 				if entry.name not in entry_answers:
-					raise ValueError('{} not in loaded data'.format(entry.name))
+					raise BoardError('{} not in loaded data'.format(entry.name))
 		for entries in self.entries:
 			for entry in entries:
 				answers, scores = zip(*entry_answers[entry.name]) # type: Sequence, Sequence
@@ -725,7 +725,7 @@ class Board(object):
 				missing_entries[direction_order] = next_entry
 
 		missing = ('next{}: {}'.format(tuple(direction.name for direction in direction_order), entry.name) for direction_order, entry in missing_entries.items())
-		raise ValueError('could not find all clues: {}'.format(' '.join(missing)))
+		raise BoardError('could not find all clues: {}'.format(' '.join(missing)))
 
 	def use_clues(self, clues : str, weight_for_unknown : float, session : Optional[aiohttp.ClientSession] = None, weight_func : Optional[Callable[[float], float]] = None) -> None:
 		owns_session = session is None
@@ -741,11 +741,12 @@ class Board(object):
 			)
 			session = aiohttp.ClientSession(headers=headers, connector=connector)
 		assert session is not None
+		proxy = Proxy()
 		tasks = []
 		dm = tqdm.tqdm(total=self.num_entries*len(Tracker))
 		for entries, clues_list in zip(self.entries, clues_lists):
 			for entry, clue in zip(entries, clues_list):
-				tasks.append(entry.use_clue(clue, session, weight_for_unknown, weight_func=weight_func, async_tqdm=dm))
+				tasks.append(entry.use_clue(clue, session, proxy, weight_for_unknown, weight_func=weight_func, async_tqdm=dm))
 		loop = asyncio.get_event_loop()
 		loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
 		if owns_session:

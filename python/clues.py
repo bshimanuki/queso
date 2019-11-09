@@ -31,29 +31,30 @@ CACHE_DIR = os.path.join(ROOT, 'cache')
 TIMEOUT_SECONDS = 10
 PROXY_TIMEOUT_SECONDS = 20
 
-async def get_proxy(session : aiohttp.ClientSession, state={}) -> Optional[str]:
-	if not state:
-		state['proxies'] = None
-		state['lock'] = asyncio.Semaphore()
-	if state['proxies'] is None:
-		async with state['lock']:
-			if state['proxies'] is None:
-				url = 'https://api.proxyscrape.com/?request=getproxies&proxytype=http&timeout=1000&country=all&ssl=yes&anonymity=elite'
-				task = session.get(url, timeout=aiohttp.ClientTimeout(total=TIMEOUT_SECONDS))
-				async with task as response:
-					try:
-						doc = await response.text()
-					except:
-						doc = ''
-				state['proxies'] = doc.split()
-	proxy = None
-	proxies = cast(Optional[List[str]], state['proxies'])
-	if proxies:
-		idx = random.randrange(len(proxies))
-		proxy = 'http://' + proxies[idx % len(proxies)]
-	else:
-		warnings.warn('Could not get a proxies list. Fetching resources directly.')
-	return proxy
+class Proxy(object):
+	def __init__(self):
+		self.proxies = None # type: Optional[List[str]]
+		self.lock = asyncio.Semaphore()
+
+	async def get_proxy(session : aiohttp.ClientSession) -> Optional[str]:
+		if self.proxies is None:
+			async with self.lock:
+				if self.proxies is None:
+					url = 'https://api.proxyscrape.com/?request=getproxies&proxytype=http&timeout=1000&country=all&ssl=yes&anonymity=elite'
+					task = session.get(url, timeout=aiohttp.ClientTimeout(total=TIMEOUT_SECONDS))
+					async with task as response:
+						try:
+							doc = await response.text()
+						except:
+							doc = ''
+					self.proxies = doc.split()
+		proxy = None
+		if self.proxies:
+			idx = random.randrange(len(self.proxies))
+			proxy = 'http://' + self.proxies[idx % len(self.proxies)]
+		else:
+			warnings.warn('Could not get a proxies list. Fetching resources directly.')
+		return proxy
 
 async def gather_resolve_dict(d : Dict[Any, Awaitable[Any]]) -> Dict[Any, Any]:
 	'''Resolves futures in dict values. Mutates the dict.'''
@@ -127,9 +128,10 @@ class TrackerBase(abc.ABC):
 	fetch_fail = 0 # incremented when a fetch fails
 	fetch_success = 0 # incremented when a fetch succeeds
 
-	def __init__(self, clue : str, session : aiohttp.ClientSession, length_guess : int, async_tqdm : Optional[tqdm.tqdm] = None):
+	def __init__(self, clue : str, session : aiohttp.ClientSession, proxy : Proxy, length_guess : int, async_tqdm : Optional[tqdm.tqdm] = None):
 		self.clue = clue
 		self.session = session
+		self.proxy = proxy
 		# some sites require a length
 		self.length_guess = length_guess
 		self.async_tqdm = async_tqdm
@@ -205,13 +207,13 @@ class TrackerBase(abc.ABC):
 				else:
 					pending = set()
 					if self.use_proxy:
-						proxy = await get_proxy(self.session)
+						proxy = await self.proxy.get_proxy(self.session)
 						if proxy is None:
 							self.use_proxy = False
 					num_tasks = self.proxy_num_tasks if self.use_proxy else 1
 					for i in range(num_tasks):
 						if self.use_proxy:
-							proxy = await get_proxy(self.session)
+							proxy = await self.proxy.get_proxy(self.session)
 							timeout = PROXY_TIMEOUT_SECONDS
 						else:
 							proxy = None
@@ -265,18 +267,18 @@ class TrackerBase(abc.ABC):
 
 class Tracker(enum.Enum):
 	@classmethod
-	async def get_scores_by_tracker(cls, clue : str, session : aiohttp.ClientSession, length_guess : int, trackers : Optional[Iterable['Tracker']] = None, async_tqdm : Optional[tqdm.tqdm] = None) -> Dict[Any, Dict[str, float]]:
+	async def get_scores_by_tracker(cls, clue : str, session : aiohttp.ClientSession, proxy : Proxy, length_guess : int, trackers : Optional[Iterable['Tracker']] = None, async_tqdm : Optional[tqdm.tqdm] = None) -> Dict[Any, Dict[str, float]]:
 		scores = {
-			tracker.value: tracker.value(clue, session, length_guess, async_tqdm=async_tqdm).get_scores()
+			tracker.value: tracker.value(clue, session, proxy, length_guess, async_tqdm=async_tqdm).get_scores()
 			for tracker in (cls if trackers is None else trackers) # type: ignore # mypy does not recognize enums
 		}
 		tracker_scores = await gather_resolve_dict(scores)
 		return tracker_scores
 
 	@classmethod
-	async def aggregate_scores(cls, clue : str, session : aiohttp.ClientSession, length_guess : int, async_tqdm : Optional[tqdm.tqdm] = None) -> Dict[str, float]:
+	async def aggregate_scores(cls, clue : str, session : aiohttp.ClientSession, proxy : Proxy, length_guess : int, async_tqdm : Optional[tqdm.tqdm] = None) -> Dict[str, float]:
 		'''Aggregate trackers and reduce by sum.'''
-		tracker_scores = await cls.get_scores_by_tracker(clue, session, length_guess, async_tqdm=async_tqdm)
+		tracker_scores = await cls.get_scores_by_tracker(clue, session, proxy, length_guess, async_tqdm=async_tqdm)
 		scores = defaultdict(float) # type: Dict[str, float]
 		for tracker, _scores in tracker_scores.items():
 			# skip redundant trackers whose parent have results
@@ -519,13 +521,14 @@ if __name__ == '__main__':
 		'User-Agent': 'queso AppleWebKit/9000 Chrome/9000',
 	}
 	session = aiohttp.ClientSession(headers=headers)
+	proxy = Proxy()
 	clue = 'batman sidekick'
 	# clue = '😠'
 	q = []
 	trackers = [Tracker.WORDPLAYS] # type: Optional[List[Any]] # mypy does not recognize enums
 	trackers = None
 	for i in range(1):
-		q.append(Tracker.get_scores_by_tracker(clue, session, 5, trackers=trackers))
+		q.append(Tracker.get_scores_by_tracker(clue, session, proxy, 5, trackers=trackers))
 	all_tasks = asyncio.gather(*q)
 	loop = asyncio.get_event_loop()
 	answer_scores = loop.run_until_complete(all_tasks)
@@ -533,4 +536,4 @@ if __name__ == '__main__':
 	loop.close()
 	result = answer_scores[0]
 	for tracker, values in result.items():
-		print(tracker.name, values)
+		print(tracker.__name__, values)

@@ -29,20 +29,20 @@ def set_clipboard(**kwargs):
 	if text is not None and html is not None:
 		raise ValueError()
 	if internal:
-		os.close(sys.stdin.fileno())
-		os.close(sys.stdout.fileno())
-		os.close(sys.stderr.fileno())
-		mime = QMimeData()
-		mime.setData('text/application', b'queso')
-		if text is not None:
-			mime.setText(text)
-		if html is not None:
-			mime.setHtml(html)
-		clip = get_application().clipboard()
-		clip.setMimeData(mime)
-		clip.dataChanged.connect(get_application().exit)
-		get_application().exec_()
-		exit()
+		if not os.fork():
+			os.close(sys.stdin.fileno())
+			os.close(sys.stdout.fileno())
+			os.close(sys.stderr.fileno())
+			mime = QMimeData()
+			mime.setData('text/application', b'queso')
+			if text is not None:
+				mime.setText(text)
+			if html is not None:
+				mime.setHtml(html)
+			clip = get_application().clipboard()
+			clip.setMimeData(mime)
+			clip.dataChanged.connect(get_application().exit)
+			sys.exit(get_application().exec_())
 	else:
-		p = multiprocessing.get_context('spawn').Process(target=set_clipboard, kwargs=kwargs, daemon=False)
+		p = multiprocessing.get_context('spawn').Process(target=set_clipboard, kwargs=kwargs, daemon=True)
 		p.start()

@@ -20,3 +20,6 @@ def to_str(answer: np.ndarray) -> str:
 
 def normalize_unicode(s : str) -> str:
 	return unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode('ascii')
+
+class BoardError(ValueError):
+	pass

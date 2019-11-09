@@ -1,18 +1,26 @@
 import argparse
 import asyncio
+import multiprocessing
 import os
 import queue
 import signal
 import sys
 import threading
+import traceback
 from typing import Optional
 
 import imageio
 import numpy as np
+from PyQt5.Qt import pyqtSignal, QObject, QThread
 
 from board import Board
 from board_extract import make_board
 from clipboard_qt import get_application, get_clipboard, set_clipboard
+from utils import BoardError
+
+
+class Signal(QObject):
+	closeApp = pyqtSignal()
 
 
 class QueueItem(object):
@@ -84,8 +92,16 @@ class Session(object):
 		self.clip = self.app.clipboard()
 		self.clip.dataChanged.connect(self.check_clipboard)
 		self.queue = queue.Queue()
-		self.thread = threading.Thread(target=self.handle, daemon=True)
+		self.thread = QThread()
+		self.signal = Signal()
+		self.signal.closeApp.connect(self.exit)
+		self.thread.run = self.handle
 		self.thread.start()
+
+	def exit(self):
+		self.thread.quit()
+		self.thread.wait()
+		self.app.quit()
 
 	@property
 	def image_file(self) -> str:
@@ -218,21 +234,27 @@ class Session(object):
 		self.queue.put(QueueItem(img=img, clues=text_data.decode('utf-8')))
 
 	def handle(self) -> None:
-		asyncio.set_event_loop(asyncio.new_event_loop())
-		last_qi = None
-		while True:
-			qi = self.queue.get()
-			if qi == last_qi:
-				# don't run if nothing has changed
-				sys.stderr.write('Clipboard contents have not changed, skipping...\n')
-				continue
-			if qi.img is not None:
-				self.set_image(qi.img, loading_mode=qi.loading_mode)
-			elif qi.clues:
-				self.set_clues(qi.clues, loading_mode=qi.loading_mode)
-			elif qi.entries:
-				self.set_entries(qi.entries, loading_mode=qi.loading_mode)
-			last_qi = qi
+		try:
+			asyncio.set_event_loop(asyncio.new_event_loop())
+			last_qi = None
+			while True:
+				qi = self.queue.get()
+				if qi == last_qi:
+					# don't run if nothing has changed
+					sys.stderr.write('Clipboard contents have not changed, skipping...\n')
+					continue
+				try:
+					if qi.img is not None:
+						self.set_image(qi.img, loading_mode=qi.loading_mode)
+					elif qi.clues:
+						self.set_clues(qi.clues, loading_mode=qi.loading_mode)
+					elif qi.entries:
+						self.set_entries(qi.entries, loading_mode=qi.loading_mode)
+				except BoardError:
+					traceback.print_exc()
+				last_qi = qi
+		finally:
+			self.signal.closeApp.emit()
 
 
 def main():
