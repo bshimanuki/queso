@@ -21,7 +21,7 @@ import aiohttp
 import bs4
 import tqdm
 
-from utils import answerize, normalize_unicode, GroupException
+from .utils import answerize, normalize_unicode, GroupException
 
 '''
 Scoring ported and extended from crows project at https://github.com/kcaze/crows.

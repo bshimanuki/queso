@@ -15,10 +15,10 @@ import numpy as np
 from PyQt5.Qt import pyqtSignal, QObject, QThread
 import tqdm
 
-from board import Board
-from board_extract import make_board
-from clipboard_qt import get_application, get_clipboard, set_clipboard
-from utils import BoardError
+from .board import Board
+from .board_extract import make_board
+from .clipboard_qt import get_application, get_clipboard, set_clipboard
+from .utils import BoardError
 
 
 class Signal(QObject):
@@ -57,7 +57,7 @@ class QueueItem(object):
 		return True
 
 
-class Session(object):
+class Server(object):
 	ROOT_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 	IMAGE_FILE = os.path.join(ROOT_DIR, 'last-image.png')
 	CLUES_FILE = os.path.join(ROOT_DIR, 'last-clues.txt')
@@ -73,9 +73,9 @@ class Session(object):
 			use_entries : bool = True,
 	):
 		# state variables
-		self.board = None
-		self.clues = None
-		self.entries = None
+		self.board = None # type: Optional[Board]
+		self.clues = None # type: Optional[str]
+		self.entries = None # type: Optional[str]
 
 		# file name variables
 		self._image_file = image_file
@@ -93,12 +93,14 @@ class Session(object):
 		self.app = get_application()
 		self.clip = self.app.clipboard()
 		self.clip.dataChanged.connect(self.check_clipboard)
-		self.queue = queue.Queue()
+		logging.info('Started clipboard event handler. Copy an image or text to start.')
+		self.queue = queue.Queue() # type: queue.Queue[QueueItem]
 		self.thread = QThread()
 		self.signal = Signal()
 		self.signal.closeApp.connect(self.exit)
 		self.thread.run = self.handle
 		self.thread.start()
+		logging.info('Started crossword solver worker thread.')
 
 	def exit(self):
 		self.thread.quit()
@@ -121,16 +123,16 @@ class Session(object):
 	def output_file(self) -> str:
 		return self._output_file or self.OUTPUT_FILE
 
-	def set_image(self, img, loading_mode=False) -> None:
+	def set_image(self, img : np.ndarray, loading_mode : bool = False) -> None:
 		self.board = make_board(img)
 		self.set_output()
 		self.solve_board(loading_mode=loading_mode)
 
-	def set_clues(self, clues, loading_mode=False) -> None:
+	def set_clues(self, clues : str, loading_mode : bool = False) -> None:
 		self.clues = clues
 		self.solve_board(loading_mode=loading_mode)
 
-	def set_entries(self, entries, loading_mode=False) -> None:
+	def set_entries(self, entries : str, loading_mode : bool = False) -> None:
 		self.entries = entries
 		with open(self.entries_file, 'wb') as f:
 			f.write(self.entries.encode('utf-8'))
@@ -153,9 +155,9 @@ class Session(object):
 					self.board.use_clues(self.clues, weight_for_unknown=self.weight_for_unknown, weight_func=self.weight_func)
 					self.set_entries(self.board.dump_entries(), loading_mode=loading_mode)
 					updated = True
-		if updated and self.board.has_clues:
-			self.run()
-			self.set_output()
+			if updated and self.board.has_clues:
+				self.run()
+				self.set_output()
 
 	def load_image(self, raise_not_exist : bool = False) -> None:
 		fname = self.image_file
@@ -265,7 +267,7 @@ class Session(object):
 
 def main():
 	signal.signal(signal.SIGINT, signal.SIG_DFL)
-	logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.INFO)
+	logging.basicConfig(format='[%(levelname)s:%(module)s] %(message)s', level=logging.INFO)
 
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--image', '-i')
@@ -277,7 +279,7 @@ def main():
 	parser.add_argument('--clip', action='store_true')
 	args = parser.parse_args()
 
-	session = Session(
+	server = Server(
 		image_file=args.image,
 		clues_file=args.clues,
 		entries_file=args.entries,
@@ -285,10 +287,10 @@ def main():
 		use_entries=args.use_entries,
 	)
 	if args.clip:
-		session.check_clipboard()
+		server.check_clipboard()
 	else:
-		session.load()
-	session.app.exec_()
+		server.load()
+	server.app.exec_()
 
 
 if __name__ == '__main__':

@@ -8,9 +8,9 @@ from typing import DefaultDict, List, Optional
 import imageio
 import numpy as np
 
-from board import Board
-from board_extract import make_board
-from clipboard_qt import set_clipboard
+from .board import Board
+from .board_extract import make_board
+from .clipboard_qt import set_clipboard
 
 
 if __name__ == '__main__':

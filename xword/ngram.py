@@ -5,7 +5,7 @@ from typing import Optional
 
 import numpy as np
 
-from utils import normalize_unicode, to_uint
+from .utils import normalize_unicode, to_uint
 
 class NGram(object):
 	# 0-25 are A-Z
@@ -62,6 +62,7 @@ class NGram(object):
 	def unigram(self, boundaries : bool = False) -> np.ndarray:
 		if not self.computed:
 			self._compute()
+		assert self._unigram is not None
 		if boundaries:
 			return self._unigram
 		else:
@@ -71,15 +72,17 @@ class NGram(object):
 	def bigram(self, boundaries : bool = False) -> np.ndarray:
 		if not self.computed:
 			self._compute()
+		assert self._bigram is not None
 		if boundaries:
 			return self._bigram
 		else:
-			p = self._bigram[:self.n_alpha, :_self.n_alpha]
+			p = self._bigram[:self.n_alpha, :self.n_alpha]
 			return p / p.sum()
 
 	def trigram(self, boundaries : bool = False) -> np.ndarray:
 		if not self.computed:
 			self._compute()
+		assert self._trigram is not None
 		if boundaries:
 			return self._trigram
 		else:

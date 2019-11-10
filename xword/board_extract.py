@@ -1,6 +1,7 @@
 from fractions import Fraction
 import math
 import logging
+from typing import cast, Any, Dict, List, Optional, Tuple
 import warnings
 
 import cv2
@@ -11,12 +12,12 @@ import scipy.ndimage
 import scipy.signal
 import skimage
 
-from board import Board
-
-from typing import cast, Any, Dict, List, Optional, Tuple
+from .board import Board
 
 blacker = np.fmin
 whiter = np.fmax
+
+SAVE_IMAGES = False
 
 
 def autocorrelate(x: np.ndarray) -> np.ndarray:
@@ -74,6 +75,8 @@ def get_interpolated_peak(im: np.ndarray, dis_loc: Tuple[int, int], delta: int =
 
 def save_color(fname: str, im: np.ndarray) -> None:
 	'''Save monocromatic image in color as a colormap.'''
+	if not SAVE_IMAGES:
+		return
 	out = np.asarray(im)
 	out = np.interp(out, (out.min(), out.max()), (0, 1))
 	with warnings.catch_warnings():
@@ -84,6 +87,8 @@ def save_color(fname: str, im: np.ndarray) -> None:
 
 def save(fname: str, im: np.ndarray, resize: Optional[np.ndarray] = None) -> None:
 	'''Save image.'''
+	if not SAVE_IMAGES:
+		return
 	out = np.asarray(im)
 	with warnings.catch_warnings():
 		warnings.simplefilter('ignore') # suppress precision loss warning
@@ -296,9 +301,9 @@ def get_offset(im: np.ndarray, square_size: Tuple[float, float]) -> Tuple[Tuple[
 		g[dis_loc] = 0
 		dis_loc = np.unravel_index(g.argmax(), g.shape)
 	cont_loc, peak = get_interpolated_peak(g, dis_loc)
-	offset = cont_loc - tuple((s-1)/2 for s in cor.shape)
+	offset = cont_loc - np.asarray([(s-1)/2 for s in cor.shape])
 	offset %= square_size
-	return tuple(offset), peak
+	return tuple(offset), peak # type: ignore # mypy does not determine size
 
 def cluster_splits(xs: np.ndarray, stop_factor: float = 2, stop_base_idx: int = 10, thresh:float = 5e-2) -> List[float]:
 	'''
@@ -521,15 +526,15 @@ def make_board(im : np.ndarray) -> Board:
 		im = im[..., :3]
 
 	square_size = get_square_size(im)
-	logging.info('square size: {}'.format(square_size))
+	logging.info('Square size: {}'.format(square_size))
 	offset, peak = get_offset(im, square_size)
 	square_size_half = cast(Tuple[float, float], tuple(x / 2 for x in square_size))
 	offset_half, peak_half = get_offset(im, square_size_half)
 	# print(peak, peak_half)
 	if peak_half > peak:
 		square_size, offset, peak = square_size_half, offset_half, peak_half
-		logging.info('half square size fits better, using square size: {}'.format(square_size))
-	logging.info('offset: {}'.format(offset))
+		logging.info('Half square size fits better, using square size: {}'.format(square_size))
+	logging.info('Square offset: {}'.format(offset))
 
 	grid = make_grid(im, square_size, offset, waveform='sawtooth', double_size=False)
 	grid3 = grid[..., np.newaxis]

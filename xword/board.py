@@ -15,9 +15,9 @@ import numpy as np
 import skimage
 import tqdm
 
-from clues import Proxy, Tracker
-from ngram import ngram
-from utils import answerize, to_str, to_uint, BoardError, GroupException
+from .clues import Proxy, Tracker
+from .ngram import ngram
+from .utils import answerize, to_str, to_uint, BoardError, GroupException
 
 '''
 Represent a crossword board and fill it in with belief propagagrion using a markov random field model.
@@ -639,9 +639,9 @@ class Board(object):
 		clues = {} # type: Dict[str, Optional[str]]
 		for line in data.split('\n'):
 			if ':' in line:
-				entry_name, clue = line.split(':', 1)
-				clue = clue.strip()
-				clues[entry_name] = clue or None
+				entry_name, _clue = line.split(':', 1)
+				_clue = _clue.strip()
+				clues[entry_name] = _clue or None
 			else:
 				assert entry_name is not None
 				tokens = line.split()
@@ -723,6 +723,7 @@ class Board(object):
 								clue = line
 								number = None
 							else:
+								assert match is not None
 								number_str, clue = match.groups()
 								number = int(number_str)
 							if match_single_line or number == next_entry.number:
