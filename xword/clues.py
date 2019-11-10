@@ -134,6 +134,7 @@ def get_text_ngrams(lines : List[str], values : Optional[Iterable[int]] = None) 
 class TrackerBase(abc.ABC):
 	method = None # type: Optional[str]
 	num_trials = 3
+	proxy_num_trials = 2
 	min_valid_html_length = 1000 # for asserting we aren't getting error responses, valid responses seem to be at least 8k
 	semaphore = AsyncNoop() # type: Union[AsyncNoop, asyncio.Semaphore]
 	use_proxy = True
@@ -197,7 +198,7 @@ class TrackerBase(abc.ABC):
 				return ''
 			trial = 0
 			while trial < self.num_trials:
-				if self.use_proxy and trial > 0:
+				if self.use_proxy and trial >= self.proxy_num_trials:
 					break
 				trial += 1
 				self.trial = trial

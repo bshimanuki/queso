@@ -41,3 +41,47 @@ Usage:
 ```
 
 Consider piping to `./tools/copy_as_html` to copy to the clipboard in a sheet-pastable format.
+
+### `xword`
+```
+usage: python -m xword [-h] [--image IMAGE] [--clues CLUES]
+                       [--entries ENTRIES] [--output OUTPUT] [--clip]
+
+Server for automatic crossword solving.
+
+This tracks changes on the clipboard to update source data. After an image is
+copied, the server will generate the board as html, which can be pasted into
+Google Sheets. After an image and a set of clues are copied, the server will
+generate its best guess at filling out the board along with board and clue
+information.
+
+The server will keep running in the background, taking whatever is put on the
+clipboard, solving crosswords, and putting the results back on the clipboard.
+In particular, it does not matter whether the image of the board or the text
+of the clues is copied first. Once finished, it is recommended to stop the
+server so that it will not change new clipboard contents.
+
+This program acts by scraping a series of online crossword clue databases for
+potential answers (via proxies so that three are no rate limits). The answer
+scores are aggreated and used as priors for Bayesian inference (using Markov
+Random Fields). Belief propagation is performed using the sum-product
+algorithm where the values of cells in the crossword are the variables and the
+probability distributions over the answer candidates are the factors. Unknown
+answers are accounted for by a special answer candidate that uses a smoothed
+trigram model over past NYT answers.
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --image IMAGE, -i IMAGE
+                        Image file to read and extract a board from.
+  --clues CLUES, -c CLUES
+                        Text file to read clues from.
+  --entries ENTRIES, -e ENTRIES
+                        Text file to read entry scores from.
+  --output OUTPUT, -o OUTPUT
+                        Output file to write html (same data that is copied to
+                        the clipboard).
+  --clip                Use the clipboard contents on startup instead of
+                        loading from files. (Changes in clipboard contents are
+                        always used.)
+```

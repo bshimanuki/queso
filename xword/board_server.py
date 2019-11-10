@@ -1,3 +1,15 @@
+'''
+Server for automatic crossword solving.
+
+This tracks changes on the clipboard to update source data. After an image is copied, the server will generate the board as html, which can be pasted into Google Sheets. After an image and a set of clues are copied, the server will generate its best guess at filling out the board along with board and clue information.
+
+The server will keep running in the background, taking whatever is put on the clipboard, solving crosswords, and putting the results back on the clipboard. In particular, it does not matter whether the image of the board or the text of the clues is copied first. Once finished, it is recommended to stop the server so that it will not change new clipboard contents.
+
+This program acts by scraping a series of online crossword clue databases for potential answers (via proxies so that three are no rate limits). The answer scores are aggreated and used as priors for Bayesian inference (using Markov Random Fields). Belief propagation is performed using the sum-product algorithm where the values of cells in the crossword are the variables and the probability distributions over the answer candidates are the factors. Unknown answers are accounted for by a special answer candidate that uses a smoothed trigram model over past NYT answers.
+
+On repeated uses, all crossword answer queries are cached. Additionally, the last image, clues, generated entry answers, and output are all stored. The inputs are reused by default. To ignore a file, use the options to set the input file to /dev/null.
+'''
+
 import argparse
 import asyncio
 import logging
@@ -6,6 +18,7 @@ import os
 import queue
 import signal
 import sys
+import textwrap
 import threading
 import traceback
 from typing import Optional
@@ -70,7 +83,6 @@ class Server(object):
 			clues_file : Optional[str] = None,
 			entries_file : Optional[str] = None,
 			output_file : Optional[str] = None,
-			use_entries : bool = True,
 	):
 		# state variables
 		self.board = None # type: Optional[Board]
@@ -82,7 +94,6 @@ class Server(object):
 		self._clues_file = clues_file
 		self._entries_file = entries_file
 		self._output_file = output_file
-		self.use_entries = use_entries
 
 		# board solving variables
 		self.iterations = 30
@@ -167,7 +178,7 @@ class Server(object):
 			if self._image_file is not None or raise_not_exist:
 				raise
 		else:
-			logging.info('Loaded {}'.format(fname))
+			logging.info('Loaded image: {}'.format(fname))
 			self.queue.put(QueueItem(img=img, loading_mode=True))
 
 	def load_clues(self, raise_not_exist : bool = False) -> None:
@@ -179,7 +190,7 @@ class Server(object):
 			if self._clues_file is not None or raise_not_exist:
 				raise
 		else:
-			logging.info('Loaded {}'.format(fname))
+			logging.info('Loaded clues: {}'.format(fname))
 			self.queue.put(QueueItem(clues=clues, loading_mode=True))
 
 	def load_entries(self, raise_not_exist : bool = False) -> None:
@@ -191,7 +202,7 @@ class Server(object):
 			if self._entries_file is not None or raise_not_exist:
 				raise
 		else:
-			logging.info('Loaded {}'.format(fname))
+			logging.info('Loaded entries: {}'.format(fname))
 			self.queue.put(QueueItem(entries=entries, loading_mode=True))
 
 	def load(self) -> None:
@@ -269,14 +280,19 @@ def main():
 	signal.signal(signal.SIGINT, signal.SIG_DFL)
 	logging.basicConfig(format='[%(levelname)s:%(module)s] %(message)s', level=logging.INFO)
 
+	class LineWrapDescriptionHelpFormatter(argparse.RawDescriptionHelpFormatter):
+		def _fill_text(self, text, width, indent):
+			return '\n\n'.join('\n'.join(textwrap.wrap(paragraph.strip(), width=width, initial_indent=indent)) for paragraph in text.split('\n\n'))
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--image', '-i')
-	parser.add_argument('--clues', '-c')
-	parser.add_argument('--entries', '-e')
-	parser.add_argument('--output', '-o')
-	parser.add_argument('--use_entries', dest='use_entries', action='store_true')
-	parser.add_argument('--no_use_entries', dest='use_entries', action='store_false')
-	parser.add_argument('--clip', action='store_true')
+	parser.prog = 'python3 -m {}'.format(os.path.basename(os.path.dirname(os.path.realpath(__file__))))
+	parser.formatter_class = LineWrapDescriptionHelpFormatter
+	# parser.formatter_class = argparse.RawDescriptionHelpFormatter
+	parser.description = __doc__
+	parser.add_argument('--image', '-i', help='Image file to read and extract a board from.')
+	parser.add_argument('--clues', '-c', help='Text file to read clues from.')
+	parser.add_argument('--entries', '-e', help='Text file to read entry scores from.')
+	parser.add_argument('--output', '-o', help='Output file to write html (same data that is copied to the clipboard).')
+	parser.add_argument('--clip', action='store_true', help='Use the clipboard contents on startup instead of loading from files. (Changes in clipboard contents are always used.)')
 	args = parser.parse_args()
 
 	server = Server(
@@ -284,7 +300,6 @@ def main():
 		clues_file=args.clues,
 		entries_file=args.entries,
 		output_file=args.output,
-		use_entries=args.use_entries,
 	)
 	if args.clip:
 		server.check_clipboard()
