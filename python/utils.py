@@ -23,3 +23,7 @@ def normalize_unicode(s : str) -> str:
 
 class BoardError(ValueError):
 	pass
+
+class GroupException(Exception):
+	def __init__(self, exceptions):
+		self.exceptions = exceptions

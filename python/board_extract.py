@@ -1,5 +1,6 @@
 from fractions import Fraction
 import math
+import logging
 import warnings
 
 import cv2
@@ -271,7 +272,7 @@ def make_grid(im: np.ndarray, square_size: Tuple[float, float], origin: Tuple[fl
 		raise NotImplemented()
 	return grid
 
-def get_offset(im: np.ndarray, square_size: Tuple[float, float]) -> np.ndarray:
+def get_offset(im: np.ndarray, square_size: Tuple[float, float]) -> Tuple[Tuple[float, float], float]:
 	'''Compute the offset in pixels from the center of the image given the square size.'''
 	grid = make_grid(im, square_size, waveform='sawtooth', double_size=True)
 	# save('grid.png', grid)
@@ -297,7 +298,7 @@ def get_offset(im: np.ndarray, square_size: Tuple[float, float]) -> np.ndarray:
 	cont_loc, peak = get_interpolated_peak(g, dis_loc)
 	offset = cont_loc - tuple((s-1)/2 for s in cor.shape)
 	offset %= square_size
-	return offset, peak
+	return tuple(offset), peak
 
 def cluster_splits(xs: np.ndarray, stop_factor: float = 2, stop_base_idx: int = 10, thresh:float = 5e-2) -> List[float]:
 	'''
@@ -341,7 +342,7 @@ def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple
 	dy, dx = square_size
 	im = skimage.img_as_float(im)
 	center = tuple(s / 2 for s in im.shape[:2])
-	origin = center + offset
+	origin = np.asarray(center) + np.asarray(offset)
 
 	# create grid masks
 	width = 1 / 16
@@ -475,7 +476,7 @@ def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple
 	aux_output = {} # type: Dict[Any, Any]
 	board = separate(mask=None, values=squares_bordered, condition=whiter, condition2=blacker, default=white_background, aux_output=aux_output)
 	if aux_output.get('default', False):
-		warnings.warn('Could not get board from borders, using white background instead.')
+		logging.warning('Could not get board from borders, using white background instead.')
 	save('board.png', board, resize=im)
 	empty = np.zeros_like(board)
 
@@ -520,15 +521,15 @@ def make_board(im : np.ndarray) -> Board:
 		im = im[..., :3]
 
 	square_size = get_square_size(im)
-	print('square size:', square_size)
+	logging.info('square size: {}'.format(square_size))
 	offset, peak = get_offset(im, square_size)
 	square_size_half = cast(Tuple[float, float], tuple(x / 2 for x in square_size))
 	offset_half, peak_half = get_offset(im, square_size_half)
 	# print(peak, peak_half)
 	if peak_half > peak:
 		square_size, offset, peak = square_size_half, offset_half, peak_half
-		print('half square size fits better, using square size:', square_size)
-	print('offset:', offset)
+		logging.info('half square size fits better, using square size: {}'.format(square_size))
+	logging.info('offset: {}'.format(offset))
 
 	grid = make_grid(im, square_size, offset, waveform='sawtooth', double_size=False)
 	grid3 = grid[..., np.newaxis]
@@ -537,7 +538,7 @@ def make_board(im : np.ndarray) -> Board:
 	save('c.png', im)
 
 	board = analyze_grid(im, square_size, offset)
-	print('board shape:', '{}x{}'.format(*board.shape))
+	logging.info('board shape: {}x{}'.format(*board.shape))
 
 	return board
 

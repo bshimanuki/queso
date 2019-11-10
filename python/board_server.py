@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import logging
 import multiprocessing
 import os
 import queue
@@ -12,6 +13,7 @@ from typing import Optional
 import imageio
 import numpy as np
 from PyQt5.Qt import pyqtSignal, QObject, QThread
+import tqdm
 
 from board import Board
 from board_extract import make_board
@@ -140,14 +142,18 @@ class Session(object):
 		if self.board is not None:
 			if self.entries is not None:
 				if loading_mode and not self.board.has_clues:
-					self.board.load_entries(self.entries, weight_for_unknown=self.weight_for_unknown)
-					updated = True
+					try:
+						self.board.load_entries(self.entries, weight_for_unknown=self.weight_for_unknown)
+						updated = True
+					except:
+						self.entries = None
+						raise
 			if self.clues is not None:
 				if not loading_mode or not self.board.has_clues:
 					self.board.use_clues(self.clues, weight_for_unknown=self.weight_for_unknown, weight_func=self.weight_func)
 					self.set_entries(self.board.dump_entries(), loading_mode=loading_mode)
 					updated = True
-		if updated:
+		if updated and self.board.has_clues:
 			self.run()
 			self.set_output()
 
@@ -159,7 +165,7 @@ class Session(object):
 			if self._image_file is not None or raise_not_exist:
 				raise
 		else:
-			sys.stderr.write('Loaded {}\n'.format(fname))
+			logging.info('Loaded {}'.format(fname))
 			self.queue.put(QueueItem(img=img, loading_mode=True))
 
 	def load_clues(self, raise_not_exist : bool = False) -> None:
@@ -171,7 +177,7 @@ class Session(object):
 			if self._clues_file is not None or raise_not_exist:
 				raise
 		else:
-			sys.stderr.write('Loaded {}\n'.format(fname))
+			logging.info('Loaded {}'.format(fname))
 			self.queue.put(QueueItem(clues=clues, loading_mode=True))
 
 	def load_entries(self, raise_not_exist : bool = False) -> None:
@@ -183,7 +189,7 @@ class Session(object):
 			if self._entries_file is not None or raise_not_exist:
 				raise
 		else:
-			sys.stderr.write('Loaded {}\n'.format(fname))
+			logging.info('Loaded {}'.format(fname))
 			self.queue.put(QueueItem(entries=entries, loading_mode=True))
 
 	def load(self) -> None:
@@ -193,8 +199,8 @@ class Session(object):
 
 	def run(self) -> None:
 		if self.board is not None and self.board.has_clues:
-			sys.stderr.write('Running bayesian model...\n')
-			for _ in range(self.iterations):
+			logging.info('Running bayesian model...')
+			for _ in tqdm.trange(self.iterations):
 				self.board.update_cells()
 				self.board.update_entries()
 			self.board.update_cells()
@@ -204,10 +210,10 @@ class Session(object):
 		if self.board is not None:
 			if self.board.has_clues:
 				output = self.board.format_multiple()
-				sys.stderr.write('Copied filled grids to clipboard!\n')
+				logging.info('Copied filled grids to clipboard!')
 			else:
 				output = self.board.format(show_entries=False)
-				sys.stderr.write('Copied empty grid to clipboard!\n')
+				logging.info('Copied empty grid to clipboard!')
 
 		if output is not None:
 			with open(self.output_file, 'wb') as f:
@@ -226,11 +232,11 @@ class Session(object):
 			with open(self.image_file, 'wb') as f:
 				f.write(img_data)
 			img = imageio.imread(img_data)
-			sys.stderr.write('Received image: {} bytes\n'.format(len(img_data)))
+			logging.info('Enqueued clipboard image: {} bytes'.format(len(img_data)))
 		elif text_data:
 			with open(self.clues_file, 'wb') as f:
 				f.write(text_data)
-			sys.stderr.write('Received text: {} bytes\n'.format(len(text_data)))
+			logging.info('Enqueued clipboard text: {} bytes'.format(len(text_data)))
 		self.queue.put(QueueItem(img=img, clues=text_data.decode('utf-8')))
 
 	def handle(self) -> None:
@@ -241,7 +247,7 @@ class Session(object):
 				qi = self.queue.get()
 				if qi == last_qi:
 					# don't run if nothing has changed
-					sys.stderr.write('Clipboard contents have not changed, skipping...\n')
+					logging.info('Clipboard contents have not changed, skipping...')
 					continue
 				try:
 					if qi.img is not None:
@@ -259,6 +265,7 @@ class Session(object):
 
 def main():
 	signal.signal(signal.SIGINT, signal.SIG_DFL)
+	logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.INFO)
 
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--image', '-i')

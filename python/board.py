@@ -1,13 +1,14 @@
 import asyncio
-from collections import defaultdict
+from collections import Counter, defaultdict
 import copy
 import enum
 import functools
+import logging
 import math
 import operator
 import re
+import sys
 from typing import cast, Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
-import warnings
 
 import aiohttp
 import numpy as np
@@ -16,7 +17,7 @@ import tqdm
 
 from clues import Proxy, Tracker
 from ngram import ngram
-from utils import answerize, to_str, to_uint, BoardError
+from utils import answerize, to_str, to_uint, BoardError, GroupException
 
 '''
 Represent a crossword board and fill it in with belief propagagrion using a markov random field model.
@@ -24,8 +25,8 @@ Represent a crossword board and fill it in with belief propagagrion using a mark
 
 
 class Direction(enum.IntEnum):
-	DOWN = 0
-	ACROSS = 1
+	ACROSS = 0
+	DOWN = 1
 
 
 class Color(object):
@@ -337,8 +338,8 @@ class Entry(object):
 		self.scores = np.asarray(scores, dtype=np.float)
 		self.p = self.scores / self.scores.sum()
 
-	async def use_clue(self, clue : str, session : aiohttp.ClientSession, proxy : Proxy, weight_for_unknown : float, weight_func : Optional[Callable[[float], float]] = None, async_tqdm : tqdm.tqdm = None) -> None:
-		answer_scores = await Tracker.aggregate_scores(clue, session, proxy, len(self), async_tqdm=async_tqdm)
+	async def use_clue(self, clue : str, session : aiohttp.ClientSession, proxy : Proxy, weight_for_unknown : float, weight_func : Optional[Callable[[float], float]] = None, async_tqdm : tqdm.tqdm = None, excs : Optional[GroupException] = None) -> None:
+		answer_scores = await Tracker.aggregate_scores(clue, session, proxy, len(self), async_tqdm=async_tqdm, excs=excs)
 		answers = [None] # type: List[Optional[str]]
 		weights = [weight_for_unknown]
 		for answer, score in answer_scores.items():
@@ -418,7 +419,7 @@ class Board(object):
 		if numbered_cells is None:
 			numbered_cells = possibly_numbered_cells
 		if numbered_cells.any() and (numbered_cells != possibly_numbered_cells).all():
-			print('Warning: numbered cells don\'t match board shape')
+			logging.warning('numbered cells don\'t match board shape\n')
 
 		# cell global properties
 		n = 0
@@ -471,9 +472,9 @@ class Board(object):
 							crossless += 1
 		self.entries[Direction.DOWN] = sorted(self.entries[Direction.DOWN])
 		if crossless:
-			warnings.warn('{} cells are missing crosses'.format(crossless))
+			logging.warning('{} cells are missing crosses'.format(crossless))
 		if numberless:
-			warnings.warn('{} cells are missing numbers'.format(numberless))
+			logging.warning('{} cells are missing numbers'.format(numberless))
 
 	@property
 	def num_entries(self):
@@ -601,17 +602,18 @@ class Board(object):
 				elif output == 'plain':
 					strings.append('\n')
 
-		if output == 'html':
-			entry = format_entry(entry_i)
-			entry_i += 1
-			while entry is not None:
-				strings.append('<tr>')
-				strings.append('<td></td>' * ((self.shape[1] + padding) * num_board_x - padding))
-				strings.append(entry)
-				strings.append('</tr>')
+		if show_entries:
+			if output == 'html':
 				entry = format_entry(entry_i)
 				entry_i += 1
-			strings.append('</tbody></table>')
+				while entry is not None:
+					strings.append('<tr>')
+					strings.append('<td></td>' * ((self.shape[1] + padding) * num_board_x - padding))
+					strings.append(entry)
+					strings.append('</tr>')
+					entry = format_entry(entry_i)
+					entry_i += 1
+				strings.append('</tbody></table>')
 		return ''.join(strings)
 
 	def dump_entries(self, dump_clues=True, dump_scores=True) -> str:
@@ -639,7 +641,7 @@ class Board(object):
 			if ':' in line:
 				entry_name, clue = line.split(':', 1)
 				clue = clue.strip()
-				clues[entry_name] = clue if clue else None
+				clues[entry_name] = clue or None
 			else:
 				assert entry_name is not None
 				tokens = line.split()
@@ -656,8 +658,10 @@ class Board(object):
 				# TODO: standardize None order
 				answers = [None] + list(answers)
 				scores = [weight_for_unknown] + list(scores)
+				clue = clues[entry.name]
 				entry.set_answers(answers, scores, clue=clue)
-		self.has_clues = True
+		if self.num_entries:
+			self.has_clues = True
 
 	def update_cells(self) -> None:
 		for row in self.grid:
@@ -672,64 +676,84 @@ class Board(object):
 				entry.update_p()
 
 	def parse_clues(self, clues : str) -> List[List[str]]:
-		assert min(map(len, self.entries)) > 0
+		if not self.num_entries:
+			raise BoardError('No entries for board')
 		lines = clues.split('\n')
 		missing_entries = {} # type: Dict[Tuple[Direction, ...], Entry]
-		for direction_order in (tuple(Direction), tuple(reversed(tuple(Direction)))):
-			clues_lists = [[], []] # type: List[List[str]]
+		starts_with_digit_regex = re.compile(r'\W*(\d+)\b[\s\.:]*(.*)')
 
-			direction_iter = iter(direction_order)
-			direction = None # type: Optional[Direction]
-			next_direction = next(direction_iter) # type: Optional[Direction]
-			next_direction_first = cast(Direction, next_direction)
-			next_entry = self.entries[next_direction_first][0] # type: Optional[Entry]
-			last_entry = None # type: Optional[Entry]
-			for line in lines:
-				line = line.strip()
-				if not line:
-					continue
-				if next_direction is not None and next_direction != direction:
-					# eat empty lines and DOWN/ACROSS section
-					if line.upper() == next_direction.name:
-						direction = next_direction
+		# if normal matching fails, try to match each clue to a single line
+		# NB: standard convention is to list ACROSS before DOWN
+		clue_lines = [line for line in lines if line.strip() and line.strip().upper() not in map(lambda d: d.name.upper(), Direction)]
+		num_of_clues_with_numbers = sum(bool(starts_with_digit_regex.fullmatch(line)) for line in clue_lines)
+		should_match_single_line = len(clue_lines) == self.num_entries and num_of_clues_with_numbers < 10
+
+		match_single_line_options = [False]
+		if should_match_single_line:
+			match_single_line_options.append(True)
+
+		for match_single_line in match_single_line_options:
+			for direction_order in (tuple(Direction), tuple(reversed(tuple(Direction)))):
+				clues_lists = [[], []] # type: List[List[str]]
+
+				direction_iter = iter(direction_order)
+				direction = None # type: Optional[Direction]
+				next_direction = next(direction_iter) # type: Optional[Direction]
+				next_direction_first = cast(Direction, next_direction)
+				next_entry = self.entries[next_direction_first][0] # type: Optional[Entry]
+				last_entry = None # type: Optional[Entry]
+				for line in lines:
+					line = line.strip()
+					if not line:
 						continue
-				if next_direction is None:
-					next_entry = None
-				else:
-					next_entry = self.entries[next_direction][len(clues_lists[next_direction])]
-				if next_entry is not None:
-					assert next_direction is not None
-					match = re.match(r'(\d+)\b[\s\.:]*(.*)', line)
-					if match:
-						number_str, clue = match.groups()
-						number = int(number_str)
-						if number == next_entry.number:
-							# start next clue
+					if next_direction is not None and next_direction != direction:
+						# eat empty lines and DOWN/ACROSS section
+						if line.upper() == next_direction.name:
 							direction = next_direction
-							last_entry = self.entries[direction][len(clues_lists[direction])]
-							clues_lists[direction].append(clue)
-							if len(clues_lists[next_direction]) == len(self.entries[next_direction]):
-								try:
-									next_direction = next(direction_iter)
-								except StopIteration:
-									next_direction = None
 							continue
-				# next clue identifier not found, continue previous clue
-				if direction is not None and clues_lists[direction]:
-					clues_lists[direction][-1] += ' ' + line
-			# return the clues if we found them, otherwise indicate what we didn't find
-			if tuple(map(len, clues_lists)) == tuple(map(len, self.entries)):
-				return clues_lists
-			else:
-				assert next_entry is not None
-				missing_entries[direction_order] = next_entry
+					if next_direction is None:
+						next_entry = None
+					else:
+						next_entry = self.entries[next_direction][len(clues_lists[next_direction])]
+					if next_entry is not None:
+						assert next_direction is not None
+						match = starts_with_digit_regex.match(line)
+						if match or match_single_line:
+							if match_single_line:
+								clue = line
+								number = None
+							else:
+								number_str, clue = match.groups()
+								number = int(number_str)
+							if match_single_line or number == next_entry.number:
+								# start next clue
+								direction = next_direction
+								last_entry = self.entries[direction][len(clues_lists[direction])]
+								clues_lists[direction].append(clue)
+								if len(clues_lists[next_direction]) == len(self.entries[next_direction]):
+									try:
+										next_direction = next(direction_iter)
+									except StopIteration:
+										next_direction = None
+								continue
+					# next clue identifier not found, continue previous clue
+					if direction is not None and clues_lists[direction]:
+						clues_lists[direction][-1] += ' ' + line
+				# return the clues if we found them, otherwise indicate what we didn't find
+				if tuple(map(len, clues_lists)) == tuple(map(len, self.entries)):
+					return clues_lists
+				else:
+					assert next_entry is not None
+					# show info only for with number matching
+					if not match_single_line:
+						missing_entries[direction_order] = next_entry
 
 		missing = ('next{}: {}'.format(tuple(direction.name for direction in direction_order), entry.name) for direction_order, entry in missing_entries.items())
 		raise BoardError('could not find all clues: {}'.format(' '.join(missing)))
 
 	def use_clues(self, clues : str, weight_for_unknown : float, session : Optional[aiohttp.ClientSession] = None, weight_func : Optional[Callable[[float], float]] = None) -> None:
 		owns_session = session is None
-		print('Fetching answers for {} clues...'.format(self.num_entries))
+		logging.info('Fetching answers for {} clues...'.format(self.num_entries))
 		clues_lists = self.parse_clues(clues)
 		if owns_session:
 			headers = {
@@ -741,21 +765,29 @@ class Board(object):
 			)
 			session = aiohttp.ClientSession(headers=headers, connector=connector)
 		assert session is not None
-		proxy = Proxy()
+		proxy = Proxy(raise_on_error=True)
 		tasks = []
-		dm = tqdm.tqdm(total=self.num_entries*len(Tracker))
+
+		dm = tqdm.tqdm(total=self.num_entries*len(Tracker)) # give a nice status bar
+		group_exception = GroupException([]) # collect exceptions
 		for entries, clues_list in zip(self.entries, clues_lists):
 			for entry, clue in zip(entries, clues_list):
-				tasks.append(entry.use_clue(clue, session, proxy, weight_for_unknown, weight_func=weight_func, async_tqdm=dm))
+				tasks.append(entry.use_clue(clue, session, proxy, weight_for_unknown, weight_func=weight_func, async_tqdm=dm, excs=group_exception))
 		loop = asyncio.get_event_loop()
-		loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+		results = loop.run_until_complete(asyncio.gather(*tasks))
+		# exception indicator
+		if group_exception.exceptions:
+			exceptions = ['{}: {}'.format(exc.__class__.__name__, exc) for exc in group_exception.exceptions]
+			logging.warning('{} fetches returned exceptions: {}'.format(len(exceptions), Counter(exceptions)))
+
 		if owns_session:
 			loop.run_until_complete(session.close())
 		dm.close()
-		print('Fetched clue answers!')
+		logging.info('Fetched clue answers!')
+
 		for tracker in Tracker:
 			if tracker.value.expected_answers and not tracker.value.site_gave_answers:
-				warnings.warn('Did not get any answers from {}'.format(tracker.name))
+				logging.warning('Did not get any answers from {}'.format(tracker.name))
 			if tracker.value.fetch_fail:
-				print('Skipped {} clues from {} (got {})'.format(tracker.value.fetch_fail, tracker.name, tracker.value.fetch_success))
+				logging.warning('Skipped {} clues from {} (got {})'.format(tracker.value.fetch_fail, tracker.name, tracker.value.fetch_success))
 		self.has_clues = True

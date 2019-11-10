@@ -7,20 +7,21 @@ import html
 import io
 import itertools
 import json
+import logging
 import math
 import random
 import re
 import os
 import sys
 from typing import cast, Any, Awaitable, Counter as _Counter, Dict, Iterable, List, Optional, Union
+import traceback
 import urllib.parse
-import warnings
 
 import aiohttp
 import bs4
 import tqdm
 
-from utils import answerize, normalize_unicode
+from utils import answerize, normalize_unicode, GroupException
 
 '''
 Scoring ported and extended from crows project at https://github.com/kcaze/crows.
@@ -32,39 +33,57 @@ TIMEOUT_SECONDS = 10
 PROXY_TIMEOUT_SECONDS = 20
 
 class Proxy(object):
-	def __init__(self):
+	def __init__(self, raise_on_error=False):
 		self.proxies = None # type: Optional[List[str]]
 		self.lock = asyncio.Semaphore()
+		self.raise_on_error = raise_on_error
+		self.warned = False
 
-	async def get_proxy(session : aiohttp.ClientSession) -> Optional[str]:
+	async def get_proxy(self, session : aiohttp.ClientSession) -> Optional[str]:
 		if self.proxies is None:
 			async with self.lock:
 				if self.proxies is None:
 					url = 'https://api.proxyscrape.com/?request=getproxies&proxytype=http&timeout=1000&country=all&ssl=yes&anonymity=elite'
 					task = session.get(url, timeout=aiohttp.ClientTimeout(total=TIMEOUT_SECONDS))
-					async with task as response:
-						try:
+					try:
+						async with task as response:
 							doc = await response.text()
-						except:
-							doc = ''
+					except:
+						doc = ''
 					self.proxies = doc.split()
 		proxy = None
 		if self.proxies:
 			idx = random.randrange(len(self.proxies))
 			proxy = 'http://' + self.proxies[idx % len(self.proxies)]
 		else:
-			warnings.warn('Could not get a proxies list. Fetching resources directly.')
+			if self.raise_on_error:
+				raise RuntimeError('Could not find proxies')
+			else:
+				if not self.warned:
+					async with self.lock:
+						if not self.warned:
+							self.warned = True
+							logging.warning('Could not get a proxies list. Fetching resources directly.')
 		return proxy
 
-async def gather_resolve_dict(d : Dict[Any, Awaitable[Any]]) -> Dict[Any, Any]:
-	'''Resolves futures in dict values. Mutates the dict.'''
+async def gather_resolve_dict(d : Dict[Any, Awaitable[Any]], excs : Optional[GroupException] = None) -> Dict[Any, Any]:
+	'''
+	Resolves futures in dict values. Mutates the dict.
+
+	Aggregates exceptions in excs.
+	'''
 	for key, value in d.items():
 		d[key] = asyncio.ensure_future(value)
 	d_future = cast(Dict[Any, 'asyncio.Future[Any]'], d)
 	await asyncio.wait(d_future.values())
 	d_result = cast(Dict[Any, Any], d)
 	for key, value in d_future.items():
-		d_result[key] = value.result()
+		try:
+			d_result[key] = value.result()
+		except Exception as e:
+			d_result[key] = None
+			if excs is not None:
+				excs.exceptions.append(e)
 	return d_result
 
 class AsyncNoop(object):
@@ -231,19 +250,31 @@ class TrackerBase(abc.ABC):
 							for task in done:
 								try:
 									response = await task
-									_doc = await response.text()
-									assert(len(_doc) >= self.min_valid_html_length)
+									_bytes = await response.read()
+									_doc = _bytes.decode('utf-8', 'ignore')
+									if len(_doc) < self.min_valid_html_length:
+										raise aiohttp.ClientError('Invalid response')
 									if self.parse_json:
 										# check for valid json
 										json.loads(_doc)
 									doc = _doc
-								except:
+								except aiohttp.ClientError:
 									pass
+								except json.decoder.JSONDecodeError:
+									pass
+								except asyncio.TimeoutError:
+									pass
+								except asyncio.CancelledError:
+									pass
+								except:
+									# show other errors but continue
+									traceback.print_exc()
 						for task in pending:
 							task.cancel()
 							try:
 								await task
 							except:
+								# we don't care about errors in cancelled tasks
 								pass
 					if doc is None:
 						if not self.use_proxy:
@@ -257,7 +288,8 @@ class TrackerBase(abc.ABC):
 				if doc is not None:
 					return doc
 			# could not get resource
-			warnings.warn('Failed connection to {} after {} tries... skipping'.format(self.__class__.__name__, trial))
+			if not self.__class__.fetch_fail:
+				logging.warning('Failed connection to {} after {} tries... skipping'.format(self.__class__.__name__, trial))
 			self.__class__.fetch_fail += 1
 			return ''
 		finally:
@@ -267,25 +299,45 @@ class TrackerBase(abc.ABC):
 
 class Tracker(enum.Enum):
 	@classmethod
-	async def get_scores_by_tracker(cls, clue : str, session : aiohttp.ClientSession, proxy : Proxy, length_guess : int, trackers : Optional[Iterable['Tracker']] = None, async_tqdm : Optional[tqdm.tqdm] = None) -> Dict[Any, Dict[str, float]]:
+	async def get_scores_by_tracker(
+		cls,
+		clue : str,
+		session : aiohttp.ClientSession,
+		proxy : Proxy, length_guess : int,
+		trackers : Optional[Iterable['Tracker']] = None,
+		async_tqdm : Optional[tqdm.tqdm] = None,
+		excs : Optional[GroupException] = None,
+	) -> Dict[Any, Dict[str, float]]:
 		scores = {
 			tracker.value: tracker.value(clue, session, proxy, length_guess, async_tqdm=async_tqdm).get_scores()
 			for tracker in (cls if trackers is None else trackers) # type: ignore # mypy does not recognize enums
 		}
-		tracker_scores = await gather_resolve_dict(scores)
+		tracker_scores = await gather_resolve_dict(scores, excs=excs)
 		return tracker_scores
 
 	@classmethod
-	async def aggregate_scores(cls, clue : str, session : aiohttp.ClientSession, proxy : Proxy, length_guess : int, async_tqdm : Optional[tqdm.tqdm] = None) -> Dict[str, float]:
-		'''Aggregate trackers and reduce by sum.'''
-		tracker_scores = await cls.get_scores_by_tracker(clue, session, proxy, length_guess, async_tqdm=async_tqdm)
+	async def aggregate_scores(
+		cls,
+		clue : str,
+		session : aiohttp.ClientSession,
+		proxy : Proxy, length_guess : int,
+		async_tqdm : Optional[tqdm.tqdm] = None,
+		excs : Optional[GroupException] = None,
+	) -> Dict[str, float]:
+		'''
+		Aggregate trackers and reduce by sum.
+
+		Aggregates exceptions in excs
+		'''
+		tracker_scores = await cls.get_scores_by_tracker(clue, session, proxy, length_guess, async_tqdm=async_tqdm, excs=excs)
 		scores = defaultdict(float) # type: Dict[str, float]
 		for tracker, _scores in tracker_scores.items():
 			# skip redundant trackers whose parent have results
 			if tracker.redundant_fetch and tracker_scores[tracker.__bases__[0]]:
 				continue
-			for key, value in _scores.items():
-				scores[key] += value
+			if _scores is not None:
+				for key, value in _scores.items():
+					scores[key] += value
 		return scores
 
 
