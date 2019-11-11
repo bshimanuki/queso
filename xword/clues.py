@@ -94,7 +94,7 @@ class AsyncNoop(object):
 	def __aexit__(self, exc_type, exc_value, traceback):
 		return self
 
-with open(os.path.join(ROOT, 'google_ignore.txt')) as f:
+with open(os.path.join(ROOT, 'data/google_ignore.txt')) as f:
 	stopwords = set(line.strip() for line in f if line.strip() and not line.strip().startswith('#'))
 nonalpha_regex = re.compile(r'\W+')
 def get_text_ngrams(lines : List[str], values : Optional[Iterable[int]] = None) -> Dict[str, int]:

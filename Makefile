@@ -17,6 +17,8 @@ HDRS = $(wildcard $(INCDIR)/*.h)
 OBJS := $(patsubst $(SRCDIR)/%.cpp, $(OBJDIR)/%.o, $(SRCS))
 DEPS := $(patsubst $(SRCDIR)/%.cpp, $(OBJDIR)/%.d, $(SRCS))
 BINS := $(patsubst $(SRCDIR)/%.cpp, $(BINDIR)/%, $(SRCS))
+PYTHON_MAINS := $(wildcard */__main__.py)
+PYSCRIPTS := $(patsubst %/__main__.py, $(BINDIR)/%, $(PYTHON_MAINS))
 
 GTK_INC = $(shell pkg-config --cflags gtk+-3.0)
 GTK_LIB = $(shell pkg-config --libs gtk+-3.0)
@@ -27,15 +29,18 @@ $(OBJDIR)/%.o: $(SRCDIR)/%.cpp
 	@mkdir -p $(OBJDIR)
 	$(CC) -MMD $(CCFLAGS) -o $@ -c $< $(INC)
 
-# $(BINDIR)/%: $(OBJS)
-# $(CC) -o $@ $^ $(INC) $(LDFLAGS)
 $(BINDIR)/%: $(SRCDIR)/%.cpp
 	@mkdir -p $(BINDIR)
 	$(CC) $(CCFLAGS) -o $@ $< $(INC) $(LDFLAGS)
 
+$(BINDIR)/%: %/__main__.py
+	@mkdir -p $(BINDIR)
+	printf '#!/bin/bash\nPYTHONPATH+=:$$(dirname $$(dirname $$(readlink -f $${BASH_SOURCE[0]}))) python3 -m $(<D) "$$@"\n' > $@
+	chmod +x $@
+
 .PHONY: clean external
 
-default: $(BINS)
+default: $(BINS) $(PYSCRIPTS)
 
 all: external default
 

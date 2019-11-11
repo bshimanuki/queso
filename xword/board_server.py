@@ -1,13 +1,14 @@
 '''
-Server for automatic crossword solving.
+Server for automated crossword solving.
 
 This tracks changes on the clipboard to update source data. After an image is copied, the server will generate the board as html, which can be pasted into Google Sheets. After an image and a set of clues are copied, the server will generate its best guess at filling out the board along with board and clue information.
 
 The server will keep running in the background, taking whatever is put on the clipboard, solving crosswords, and putting the results back on the clipboard. In particular, it does not matter whether the image of the board or the text of the clues is copied first. Once finished, it is recommended to stop the server so that it will not change new clipboard contents.
 
-This program acts by scraping a series of online crossword clue databases for potential answers (via proxies so that three are no rate limits). The answer scores are aggreated and used as priors for Bayesian inference (using Markov Random Fields). Belief propagation is performed using the sum-product algorithm where the values of cells in the crossword are the variables and the probability distributions over the answer candidates are the factors. Unknown answers are accounted for by a special answer candidate that uses a smoothed trigram model over past NYT answers.
+On repeated uses, all crossword answer queries are cached. Additionally, the last image, clues, generated entry answers, and output are all stored to last-image.png, etc, under the queso project root. The last inputs are reused by default. To ignore a file, use the options to set the input file to /dev/null.
 
-On repeated uses, all crossword answer queries are cached. Additionally, the last image, clues, generated entry answers, and output are all stored. The inputs are reused by default. To ignore a file, use the options to set the input file to /dev/null.
+implementation details:
+This program has two parts, board extraction and crossword solving. A board is extracted from an image by performing autocorrelation with itself and then cross-correlation with a constructed grid of the detected size. Crossword solving is done by scraping a series of online crossword clue databases for potential answers (via proxies so that three are no rate limits). The answer scores are aggreated and used as priors for Bayesian inference (using Markov Random Fields). Belief propagation is performed using the sum-product algorithm where the values of cells in the crossword are the variables and the probability distributions over the answer candidates are the factors. Unknown answers are accounted for by a special answer candidate that uses a smoothed trigram model over past NYT answers.
 '''
 
 import argparse
@@ -282,9 +283,9 @@ def main():
 
 	class LineWrapDescriptionHelpFormatter(argparse.RawDescriptionHelpFormatter):
 		def _fill_text(self, text, width, indent):
-			return '\n\n'.join('\n'.join(textwrap.wrap(paragraph.strip(), width=width, initial_indent=indent)) for paragraph in text.split('\n\n'))
+			return '\n'.join('\n'.join(textwrap.wrap(paragraph.strip(), width=width, initial_indent=indent)) for paragraph in text.split('\n'))
 	parser = argparse.ArgumentParser()
-	parser.prog = 'python3 -m {}'.format(os.path.basename(os.path.dirname(os.path.realpath(__file__))))
+	parser.prog = os.path.basename(os.path.dirname(os.path.realpath(__file__)))
 	parser.formatter_class = LineWrapDescriptionHelpFormatter
 	# parser.formatter_class = argparse.RawDescriptionHelpFormatter
 	parser.description = __doc__

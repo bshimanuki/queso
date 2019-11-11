@@ -1,9 +1,10 @@
 # python3
 PyQt5 # GPL license
+ansi2html
 bs4
 imageio
-numpy
-scipy
-scikit-image
-tqdm
 opencv-python
+numpy
+scikit-image
+scipy
+tqdm
