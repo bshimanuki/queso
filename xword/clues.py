@@ -13,7 +13,7 @@ import random
 import re
 import os
 import sys
-from typing import cast, Any, Awaitable, Counter as _Counter, Dict, Iterable, List, Optional, Union
+from typing import cast, Any, Awaitable, Dict, Iterable, List, Optional, Union
 import traceback
 import urllib.parse
 
@@ -99,7 +99,7 @@ with open(os.path.join(ROOT, 'data/google_ignore.txt')) as f:
 nonalpha_regex = re.compile(r'\W+')
 def get_text_ngrams(lines : List[str], values : Optional[Iterable[int]] = None) -> Dict[str, int]:
 	'''Count the number of unigrams and bigrams in a series of results.'''
-	counter = Counter() # type: _Counter[str]
+	counter = Counter() # type: Dict[str, int]
 	if values is None:
 		values = (1 for line in lines)
 	for line, value in zip(lines, values):

@@ -1,5 +1,6 @@
 # python3
 PyQt5 # GPL license
+aiohttp
 ansi2html
 bs4
 imageio

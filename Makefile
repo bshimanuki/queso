@@ -35,7 +35,7 @@ $(BINDIR)/%: $(SRCDIR)/%.cpp
 
 $(BINDIR)/%: %/__main__.py
 	@mkdir -p $(BINDIR)
-	printf '#!/bin/bash\nPYTHONPATH+=:$$(dirname $$(dirname $$(readlink -f $${BASH_SOURCE[0]}))) python3 -m $(<D) "$$@"\n' > $@
+	printf '#!/bin/bash\nPYTHONPATH+=:$$(dirname $$(dirname $$(readlink -f $${BASH_SOURCE[0]} || readlink $${BASH_SOURCE[0]}))) python3 -m $(<D) "$$@"\n' > $@
 	chmod +x $@
 
 .PHONY: clean external

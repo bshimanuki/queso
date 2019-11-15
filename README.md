@@ -1,13 +1,16 @@
 # Puzzle Hunt Utils
 
+## Install Dependencies
+```
+git submodule update --init --recursive
+sudo apt install gtk+3 xclip python3-pip # or brew for mac
+pip3 install --user -r requirements.txt # or in a venv
+```
+
 ## Tools
 
 ### `copy_as_html`
 Shell script to convert stdin to html and copy to the clipboard.
-
-Dependencies:
-- `ansi2html` (from `pip`)
-- `xclip` (from `apt`)
 
 ## Programs
 
