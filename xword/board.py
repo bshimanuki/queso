@@ -764,7 +764,11 @@ class Board(object):
 				limit=300,
 				limit_per_host=10,
 			)
-			session = aiohttp.ClientSession(headers=headers, connector=connector)
+			timeout = None
+			try:
+				session = aiohttp.ClientSession(headers=headers, connector=connector, timeout=timeout)
+			except:
+				session = aiohttp.ClientSession(headers=headers, connector=connector, read_timeout=timeout)
 		assert session is not None
 		proxy = Proxy(raise_on_error=True)
 		tasks = []

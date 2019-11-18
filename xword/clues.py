@@ -12,6 +12,7 @@ import math
 import random
 import re
 import os
+import string
 import sys
 from typing import cast, Any, Awaitable, Dict, Iterable, List, Optional, Union
 import traceback
@@ -21,7 +22,7 @@ import aiohttp
 import bs4
 import tqdm
 
-from .utils import answerize, normalize_unicode, GroupException
+from .utils import answerize, normalize_unicode, uncancel, GroupException, WasCancelledError
 
 '''
 Scoring ported and extended from crows project at https://github.com/kcaze/crows.
@@ -43,14 +44,16 @@ class Proxy(object):
 		if self.proxies is None:
 			async with self.lock:
 				if self.proxies is None:
-					url = 'https://api.proxyscrape.com/?request=getproxies&proxytype=http&timeout=1000&country=all&ssl=yes&anonymity=elite'
-					task = session.get(url, timeout=aiohttp.ClientTimeout(total=TIMEOUT_SECONDS))
+					url = 'https://api.proxyscrape.com/?request=getproxies&proxytype=http&timeout=2000&country=all&ssl=yes&anonymity=elite'
+					task = session.get(url, timeout=TIMEOUT_SECONDS)
 					try:
 						async with task as response:
 							doc = await response.text()
-					except:
-						doc = ''
+					except Exception:
+						traceback.print_exc()
+						raise
 					self.proxies = doc.split()
+					logging.info('Got {} proxies.'.format(len(self.proxies)))
 		proxy = None
 		if self.proxies:
 			idx = random.randrange(len(self.proxies))
@@ -72,11 +75,11 @@ async def gather_resolve_dict(d : Dict[Any, Awaitable[Any]], excs : Optional[Gro
 
 	Aggregates exceptions in excs.
 	'''
+	d_future = {}
 	for key, value in d.items():
-		d[key] = asyncio.ensure_future(value)
-	d_future = cast(Dict[Any, 'asyncio.Future[Any]'], d)
+		d_future[key] = asyncio.ensure_future(value)
 	await asyncio.wait(d_future.values())
-	d_result = cast(Dict[Any, Any], d)
+	d_result = {}
 	for key, value in d_future.items():
 		try:
 			d_result[key] = value.result()
@@ -164,11 +167,11 @@ class TrackerBase(abc.ABC):
 	def formdata(self) -> aiohttp.FormData:
 		raise NotImplementedError()
 
-	def url_clue(self, dash=False) -> str:
+	def url_clue(self, dash = False, safe : str = '') -> str:
 		text = self.clue
 		if dash:
 			text = re.sub(r'\s', '-', text)
-		return urllib.parse.quote_plus(text)
+		return urllib.parse.quote_plus(text, safe=safe)
 
 	@staticmethod
 	def slugify(s):
@@ -176,15 +179,20 @@ class TrackerBase(abc.ABC):
 		s = re.sub(r'\W+', '-', s)
 		return s
 
+	def is_valid(self, doc : str) -> bool:
+		if len(doc) < self.min_valid_html_length:
+			return False
+		return True
+
 	async def get_scores(self) -> Dict[str, float]:
 		doc = await self.fetch()
-		answer_scores = await self._get_scores(doc)
+		answer_scores = self._get_scores(doc)
 		if answer_scores:
 			self.__class__.site_gave_answers = True
 		return answer_scores
 
 	@abc.abstractmethod
-	async def _get_scores(self, doc : str) -> Dict[str, float]:
+	def _get_scores(self, doc : str) -> Dict[str, float]:
 		raise NotImplementedError()
 
 	async def fetch(self) -> str:
@@ -239,21 +247,31 @@ class TrackerBase(abc.ABC):
 							proxy = None
 							timeout = TIMEOUT_SECONDS
 						fetch_kwargs = {
-							'timeout': aiohttp.ClientTimeout(total=timeout),
+							'timeout': timeout,
 							'proxy': proxy,
 						}
-						coroutine = task_maker(**fetch_kwargs)
+						coroutine = uncancel(task_maker(**fetch_kwargs))
 						pending.add(asyncio.ensure_future(coroutine))
 					semaphore = AsyncNoop() if self.use_proxy else self.semaphore
 					async with semaphore:
 						while doc is None and pending:
-							done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+							try:
+								done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+							except asyncio.CancelledError:
+								print('wait failed')
+								for task in pending:
+									task.cancel()
+									try:
+										await task
+									except Exception:
+										pass
+								raise
 							for task in done:
 								try:
-									response = await task
+									response = task.result()
 									_bytes = await response.read()
 									_doc = _bytes.decode('utf-8', 'ignore')
-									if len(_doc) < self.min_valid_html_length:
+									if not self.is_valid(_doc):
 										raise aiohttp.ClientError('Invalid response')
 									if self.parse_json:
 										# check for valid json
@@ -265,16 +283,14 @@ class TrackerBase(abc.ABC):
 									pass
 								except asyncio.TimeoutError:
 									pass
-								except asyncio.CancelledError:
-									pass
-								except:
+								except Exception:
 									# show other errors but continue
 									traceback.print_exc()
 						for task in pending:
 							task.cancel()
 							try:
 								await task
-							except:
+							except Exception:
 								# we don't care about errors in cancelled tasks
 								pass
 					if doc is None:
@@ -351,7 +367,7 @@ class Tracker(enum.Enum):
 			formdata = aiohttp.FormData()
 			formdata.add_field('q', self.clue)
 			return formdata
-		async def _get_scores(self, doc : str) -> Dict[str, float]:
+		def _get_scores(self, doc : str) -> Dict[str, float]:
 			answer_scores = {} # type: Dict[str, float]
 			matches = self.regex.findall(doc)
 			if any(c.isalpha() for c in self.clue):
@@ -367,18 +383,20 @@ class Tracker(enum.Enum):
 		NB: The only difference in results is ACROSSNDOWN removes spaces.
 		'''
 		method = 'get'
-		num_trials = 2
 		min_valid_html_length = 20000 # server outage is about 15k, valid response is about 150k
 		semaphore = asyncio.Semaphore(6)
-		sites = [
-			('https://www.wordplays.com/crossword-solver/{}', asyncio.Semaphore(6)),
-			('http://www.acrossndown.com/crosswords/clues/{}', asyncio.Semaphore(6)),
-		]
 		star_tag = r'<div></div>'
 		regex = re.compile(r'<tr[^>]*>\s*<td><div class=stars>((?:{})*)</div><div class=clear></div></td><td><a[^>]*>([\w\s]+)</a>'.format(star_tag))
 		def url(self) -> str:
 			return 'https://www.wordplays.com/crossword-solver/{}'.format(self.url_clue(dash=True))
-		async def _get_scores(self, doc : str) -> Dict[str, float]:
+		def is_valid(self, doc : str) -> bool:
+			if not super().is_valid(doc):
+				return False
+			if type(self) == Tracker.WORDPLAYS.value: # type: ignore # mypy does not recognize enums
+				if 'https://www.google.com/recaptcha/api.js' in doc:
+					return False
+			return True
+		def _get_scores(self, doc : str) -> Dict[str, float]:
 			answer_scores = {} # type: Dict[str, float]
 			matches = self.regex.findall(doc)
 			for match in matches:
@@ -397,7 +415,7 @@ class Tracker(enum.Enum):
 		def redundant_fetch(self): # property because of class definition ordering
 			return WORDPLAYS
 		def url(self) -> str:
-			return 'http://www.acrossndown.com/crosswords/clues/{}'.format(self.url_clue(dash=True))
+			return 'http://www.acrossndown.com/crosswords/clues/{}'.format(self.url_clue(dash=True, safe=string.punctuation))
 
 	class CROSSWORDHEAVEN(TrackerBase):
 		method = 'get'
@@ -409,7 +427,7 @@ class Tracker(enum.Enum):
 		)
 		def url(self) -> str:
 			return 'https://m.crosswordheaven.com/search/result?clue={}'.format(self.url_clue())
-		async def _get_scores(self, doc : str) -> Dict[str, float]:
+		def _get_scores(self, doc : str) -> Dict[str, float]:
 			answer_scores = {} # type: Dict[str, float]
 			matches = self.regex.findall(doc)
 			for match in matches:
@@ -426,7 +444,7 @@ class Tracker(enum.Enum):
 		regex = re.compile(r'<tr[^>]*>\s*<td[^>]*>\s*((?:{})*)\s*</td>\s*<td[^>]*>\s*<big>\s*<a[^>]*>([\w\s]+)</a>'.format(star_tag))
 		def url(self) -> str:
 			return 'https://crosswordnexus.com/finder.php?clue={}'.format(self.url_clue())
-		async def _get_scores(self, doc : str) -> Dict[str, float]:
+		def _get_scores(self, doc : str) -> Dict[str, float]:
 			answer_scores = {} # type: Dict[str, float]
 			matches = self.regex.findall(doc)
 			for match in matches:
@@ -442,7 +460,7 @@ class Tracker(enum.Enum):
 		regex = re.compile(r'<li class="answer" data-count="(\d+)" data-text="([\w\s]+)">')
 		def url(self) -> str:
 			return 'http://crosswordtracker.com/search?clue={}'.format(self.url_clue(dash=True))
-		async def _get_scores(self, doc : str) -> Dict[str, float]:
+		def _get_scores(self, doc : str) -> Dict[str, float]:
 			answer_scores = {} # type: Dict[str, float]
 			matches = self.regex.findall(doc)
 			for match in matches:
@@ -459,7 +477,7 @@ class Tracker(enum.Enum):
 		regex = re.compile('<tr>\s*<td[^>]*>\s*(?:{}\s*)*(({}\s*)*)</td>\s*<td[^>]*>\s*<tt>\s*<a[^>]*>([^<]*)</a>'.format(dot, star))
 		def url(self) -> str:
 			return 'http://www.oneacross.com/cgi-bin/search_banner.cgi?c0={}&p0={}'.format(self.url_clue(), self.length_guess)
-		async def _get_scores(self, doc : str) -> Dict[str, float]:
+		def _get_scores(self, doc : str) -> Dict[str, float]:
 			answer_scores = {} # type: Dict[str, float]
 			matches = self.regex.findall(doc)
 			for match in matches:
@@ -483,7 +501,7 @@ class Tracker(enum.Enum):
 		snippet_regex = re.compile(r'<span [^>]*class="st"[^>]*>\s*(?:<span [^>]*class="f"[^>]*>[^<]*</span>)?\s*(.*?)</span>')
 		def url(self) -> str:
 			return 'https://www.google.com/search?q={}'.format(self.url_clue())
-		async def _get_scores(self, doc : str) -> Dict[str, float]:
+		def _get_scores(self, doc : str) -> Dict[str, float]:
 			# remove bold tags
 			doc = doc.replace('<em>', '').replace('</em>', '')
 			doc = doc.replace('<b>', '').replace('</b>', '')
@@ -534,12 +552,12 @@ class Tracker(enum.Enum):
 		parse_json = True
 		def url(self) -> str:
 			return 'http://suggestqueries.google.com/complete/search?client=chrome&q={}'.format(self.url_clue())
-		async def _get_scores(self, doc : str) -> Dict[str, float]:
+		def _get_scores(self, doc : str) -> Dict[str, float]:
 			answer_scores = {} # Dict[str, float]
 			completions = []
 			try:
 				query, results, _, _, extra = json.loads(doc) # type: ignore # mypy does not handle underscore # str, List[str], Any, Any, Dict[str, Any]
-			except:
+			except Exception:
 				pass
 			else:
 				results_relevance = extra.get('google:suggestrelevance', [500 for result in results]) # values in the hundreds and thousands
@@ -574,8 +592,10 @@ if __name__ == '__main__':
 		'User-Agent': 'queso AppleWebKit/9000 Chrome/9000',
 	}
 	session = aiohttp.ClientSession(headers=headers)
-	proxy = Proxy()
+	proxy = Proxy(raise_on_error=True)
 	clue = 'batman sidekick'
+	clue = "The Metamorphosis author's first name... / ...and his last name"
+	clue = 'Intro to physics? / "Life In Hell" character'
 	# clue = '😠'
 	q = []
 	trackers = [Tracker.WORDPLAYS] # type: Optional[List[Any]] # mypy does not recognize enums

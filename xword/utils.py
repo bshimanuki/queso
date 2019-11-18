@@ -1,3 +1,4 @@
+import asyncio
 import unicodedata
 
 import numpy as np
@@ -27,3 +28,13 @@ class BoardError(ValueError):
 class GroupException(Exception):
 	def __init__(self, exceptions):
 		self.exceptions = exceptions
+
+class WasCancelledError(Exception):
+	'''Like asyncio.CancelledError but does not propagate'''
+	pass
+
+async def uncancel(coroutine):
+	try:
+		return await coroutine
+	except asyncio.CancelledError as e:
+		raise WasCancelledError() from e
