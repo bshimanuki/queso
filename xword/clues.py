@@ -257,15 +257,14 @@ class TrackerBase(abc.ABC):
 						while doc is None and pending:
 							try:
 								done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-							except asyncio.CancelledError:
-								print('wait failed')
-								for task in pending:
+							except asyncio.CancelledError as e:
+								for task in done + pending:
 									task.cancel()
 									try:
 										await task
 									except Exception:
 										pass
-								raise
+								raise e
 							for task in done:
 								try:
 									response = task.result()

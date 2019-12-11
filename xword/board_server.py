@@ -56,8 +56,8 @@ class QueueItem(object):
 	def equal(a, b):
 		if a.__class__ != b.__class__:
 			return False
-		if isinstance(a, np.ndarray):
-			return (a == b).all()
+		if isinstance(a, np.ndarray) and isinstance(b, np.ndarray):
+			return a.shape == b.shape and (a == b).all()
 		return a == b
 
 	def __eq__(self, other):
@@ -159,7 +159,7 @@ class Server(object):
 					try:
 						self.board.load_entries(self.entries, weight_for_unknown=self.weight_for_unknown)
 						updated = True
-					except:
+					except Exception:
 						self.entries = None
 						raise
 			if self.clues is not None:

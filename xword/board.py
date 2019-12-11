@@ -413,12 +413,12 @@ class Board(object):
 		possibly_numbered_cells = np.zeros_like(cells)
 		possibly_numbered_cells |= np.insert(np.logical_not(cells), 0, True, axis=0)[:-1]
 		possibly_numbered_cells |= np.insert(np.logical_not(cells), 0, True, axis=1)[:,:-1]
-		possibly_numbered_cells |= np.insert(np.logical_not(bar_below), 0, False, axis=0)[:-1]
-		possibly_numbered_cells |= np.insert(np.logical_not(bar_right), 0, False, axis=1)[:,:-1]
+		possibly_numbered_cells |= np.insert(bar_below, 0, False, axis=0)[:-1]
+		possibly_numbered_cells |= np.insert(bar_right, 0, False, axis=1)[:,:-1]
 		possibly_numbered_cells &= cells
-		if numbered_cells is None:
+		if not numbered_cells.any():
 			numbered_cells = possibly_numbered_cells
-		if numbered_cells.any() and (numbered_cells != possibly_numbered_cells).all():
+		if numbered_cells.any() and not (numbered_cells == possibly_numbered_cells).all():
 			logging.warning('numbered cells don\'t match board shape\n')
 
 		# cell global properties
@@ -678,6 +678,8 @@ class Board(object):
 	def parse_clues(self, clues : str) -> List[List[str]]:
 		if not self.num_entries:
 			raise BoardError('No entries for board')
+		if not min(map(len, self.entries)):
+			raise BoardError('No entries in some directions for board')
 		lines = clues.split('\n')
 		missing_entries = {} # type: Dict[Tuple[Direction, ...], Entry]
 		starts_with_digit_regex = re.compile(r'\W*(\d+)\b[\s\.:]*(.*)')
@@ -711,9 +713,8 @@ class Board(object):
 						if line.upper() == next_direction.name:
 							direction = next_direction
 							continue
-					if next_direction is None:
-						next_entry = None
-					else:
+					next_entry = None
+					if next_direction is not None and len(clues_lists[next_direction]) < len(self.entries[next_direction]):
 						next_entry = self.entries[next_direction][len(clues_lists[next_direction])]
 					if next_entry is not None:
 						assert next_direction is not None
@@ -754,8 +755,8 @@ class Board(object):
 
 	def use_clues(self, clues : str, weight_for_unknown : float, session : Optional[aiohttp.ClientSession] = None, weight_func : Optional[Callable[[float], float]] = None) -> None:
 		owns_session = session is None
-		logging.info('Fetching answers for {} clues...'.format(self.num_entries))
 		clues_lists = self.parse_clues(clues)
+		logging.info('Fetching answers for {} clues...'.format(self.num_entries))
 		if owns_session:
 			headers = {
 				'User-Agent': 'queso AppleWebKit/9000 Chrome/9000',
@@ -767,7 +768,7 @@ class Board(object):
 			timeout = None
 			try:
 				session = aiohttp.ClientSession(headers=headers, connector=connector, timeout=timeout)
-			except:
+			except Exception:
 				session = aiohttp.ClientSession(headers=headers, connector=connector, read_timeout=timeout)
 		assert session is not None
 		proxy = Proxy(raise_on_error=True)
