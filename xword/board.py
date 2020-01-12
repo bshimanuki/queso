@@ -3,6 +3,7 @@ from collections import Counter, defaultdict
 import copy
 import enum
 import functools
+import html
 import logging
 import math
 import operator
@@ -209,8 +210,20 @@ class Square(object):
 					styles.append('border-bottom:{};'.format(border_style))
 				if self.right is None or self.bar_right:
 					styles.append('border-right:{};'.format(border_style))
-			style = ''.join(styles)
-			strings.append('<td style="{}">'.format(style))
+			style = 'style="{}"'.format(''.join(styles))
+			attributes = [style]
+			note_lines = []
+			if display and self.is_cell and probabilities:
+				note_lines.append('p = {}'.format(prob))
+			if self.number is not None:
+				note_lines.append(str(self.number))
+				for direction, entry, entry_index in zip(Direction, self.entries, self.entry_indices):
+					if entry_index == 0:
+						note_lines.append('{}: {}'.format(direction.name, html.escape(entry.clue or '')))
+			if note_lines:
+				note = 'data-sheets-note="{}"'.format('\n'.join(note_lines))
+				attributes.append(note)
+			strings.append('<td {}>'.format(' '.join(attributes)))
 		if display:
 			if number and self.number is not None:
 				strings.append(str(self.number))
@@ -218,8 +231,6 @@ class Square(object):
 				if fill:
 					if c is not None:
 						strings.append(c)
-				elif probabilities and not number:
-					strings.append(str(prob))
 		if output == 'html':
 			strings.append('</td>')
 		elif output == 'plain':
@@ -494,19 +505,18 @@ class Board(object):
 			board_kwargs = (
 				(
 					{'fill': False, 'number': True, 'probabilities': False},
+				),
+				(
 					{'fill': True, 'number': False, 'probabilities': False, 'use_entries': True},
 				),
 				(
-					{'fill': False, 'number': False, 'probabilities': True},
-					{'fill': True, 'number': False, 'probabilities': False},
+					{'fill': True, 'number': False, 'probabilities': True},
 				),
 				(
-					{'fill': False, 'number': False, 'probabilities': True, 'reduce_op': operator.itemgetter(0)},
-					{'fill': True, 'number': False, 'probabilities': False, 'reduce_op': operator.itemgetter(0)},
+					{'fill': True, 'number': False, 'probabilities': True, 'reduce_op': operator.itemgetter(0)},
 				),
 				(
-					{'fill': False, 'number': False, 'probabilities': True, 'reduce_op': operator.itemgetter(1)},
-					{'fill': True, 'number': False, 'probabilities': False, 'reduce_op': operator.itemgetter(1)},
+					{'fill': True, 'number': False, 'probabilities': True, 'reduce_op': operator.itemgetter(1)},
 				),
 			)
 		else:
@@ -536,54 +546,60 @@ class Board(object):
 
 		def format_entry(entry_i):
 			strings = []
-			strings.append('<td></td>' * padding)
-			for direction in Direction:
-				entries = self.entries[direction]
-				if entry_i == 0:
+			if entry_i == 0:
+				for dir_i, direction in enumerate(Direction):
+					if dir_i != 0:
+						strings.append('<td></td>' * padding)
 					style = 'style="font-weight:bold;"'
 					for header in ('LEN', 'ANSWER', 'p', '#', direction.name):
 						strings.append('<td {}>{}</td>'.format(style, header))
-					return ''.join(strings)
-				entry_i -= 1
+				return ''.join(strings), True
+			entry_i -= 1
+			filled = False
+			for dir_i, (direction, entries) in enumerate(zip(Direction, self.entries)):
+				if dir_i != 0:
+					strings.append('<td></td>' * padding)
 				if entry_i < len(entries):
+					filled = True
 					entry = entries[entry_i]
-					principal, *rest = sorted(zip(entry.p, (answer if answer is None else to_str(answer) for answer in entry.answers)), reverse=True)
+					answers = sorted(zip(entry.p, (answer if answer is None else to_str(answer) for answer in entry.answers)), reverse=True)
 					strings.append('<td>{}</td>'.format(len(entry) or ''))
-					strings.append('<td>{}</td>'.format(principal[1] or ''))
-					strings.append('<td>{}</td>'.format(principal[0] or ''))
+					strings.append('<td>{}</td>'.format(answers[0][1] or ''))
+					strings.append('<td>{}</td>'.format(answers[0][0] or ''))
 					strings.append('<td>{}</td>'.format(entry.number or ''))
-					strings.append('<td>{}</td>'.format(entry.clue or ''))
-					for p, answer in rest:
-						if answer is not None:
-							strings.append('<td>{}</td>'.format(answer))
-					return ''.join(strings)
-				entry_i  -= len(entries)
-				if entry_i == 0:
-					return ''
-				entry_i -= 1
-			return None
+					answer_list = ['{} ({:.3g})'.format(answer or '*', p) for p, answer in answers]
+					strings.append('<td data-sheets-note="{}">{}</td>'.format('\n'.join(answer_list), entry.clue or ''))
+				else:
+					strings.append('<td></td>' * 5)
+			return ''.join(strings), filled
 
 		entry_i = 0
 		strings = []
 		if output == 'html':
+			strings.append('<meta name="generator" content="Sheets"/>')
 			strings.append('<table><tbody>')
 		for board_y, row_board_kwargs in enumerate(board_kwargs):
 			if board_y != 0:
 				if output == 'html':
 					for _ in range(padding):
 						strings.append('<tr>')
-						strings.append('<td></td>' * ((self.shape[1] + padding) * num_board_x - padding))
 						if show_entries:
-							entry = format_entry(entry_i)
+							entry, filled = format_entry(entry_i)
 							entry_i += 1
-							if entry is not None:
-								strings.append(entry)
+							strings.append(entry)
+							strings.append('<td></td>' * padding)
+						# strings.append('<td></td>' * ((self.shape[1] + padding) * num_board_x - padding))
 						strings.append('</tr>')
 				elif output == 'plain':
 					strings.append('\n' * padding)
 			for row in self.grid:
 				if output == 'html':
 					strings.append('<tr>')
+				if show_entries:
+					entry, filled = format_entry(entry_i)
+					entry_i += 1
+					strings.append(entry)
+					strings.append('<td></td>' * padding)
 				for board_x, square_board_kwargs in enumerate(row_board_kwargs):
 					_kwargs = square_board_kwargs or {'display': False}
 					if board_x != 0:
@@ -592,11 +608,6 @@ class Board(object):
 						strings.append(' ' * padding)
 					for square in row:
 						strings.append(square.format(**_kwargs))
-				if show_entries:
-					entry = format_entry(entry_i)
-					entry_i += 1
-					if entry is not None:
-						strings.append(entry)
 				if output == 'html':
 					strings.append('</tr>')
 				elif output == 'plain':
@@ -604,12 +615,12 @@ class Board(object):
 
 		if show_entries:
 			if output == 'html':
-				entry = format_entry(entry_i)
+				entry, filled = format_entry(entry_i)
 				entry_i += 1
-				while entry is not None:
+				while filled:
 					strings.append('<tr>')
-					strings.append('<td></td>' * ((self.shape[1] + padding) * num_board_x - padding))
 					strings.append(entry)
+					# strings.append('<td></td>' * ((self.shape[1] + padding) * num_board_x - padding))
 					strings.append('</tr>')
 					entry = format_entry(entry_i)
 					entry_i += 1
