@@ -44,7 +44,7 @@ class Proxy(object):
 		if self.proxies is None:
 			async with self.lock:
 				if self.proxies is None:
-					url = 'https://api.proxyscrape.com/?request=getproxies&proxytype=http&timeout=2000&country=all&ssl=yes&anonymity=elite'
+					url = 'https://api.proxyscrape.com/?request=getproxies&proxytype=http&timeout=5000&country=all&ssl=yes&anonymity=elite'
 					task = session.get(url, timeout=TIMEOUT_SECONDS)
 					try:
 						async with task as response:
@@ -258,7 +258,7 @@ class TrackerBase(abc.ABC):
 							try:
 								done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
 							except asyncio.CancelledError as e:
-								for task in done + pending:
+								for task in done | pending:
 									task.cancel()
 									try:
 										await task
