@@ -58,6 +58,11 @@ ostream& operator<<(ostream& os, const pair<A, B> &p) {
 	return os;
 }
 
+struct identity {
+	template<typename T>
+	constexpr	auto operator()(T&& v) const noexcept { return forward<T>(v); }
+};
+
 class GF {
 	uint8_t v;
 public:
@@ -193,7 +198,7 @@ public:
 	friend Poly operator/(const Poly &lhs, const Poly &rhs);
 	friend Poly operator%(const Poly &lhs, const Poly &rhs);
 
-	explicit operator bool() const { return any_of(begin(), end(), [](const auto &x){ return x; }); }
+	explicit operator bool() const { return any_of(begin(), end(), identity()); }
 	friend ostream &operator<<(ostream &os, const Poly &p);
 };
 Poly operator-(const Poly &lhs, const Poly &rhs) { return Poly(lhs) -= rhs; }
@@ -241,6 +246,9 @@ public:
 	auto& back() const { return vector<T>::back(); }
 	auto& data() { return vector<T>::data(); }
 	auto& data() const { return vector<T>::data(); }
+
+	auto& operator()(size_t n) { return at(n); }
+	auto& operator()(size_t n) const { return at(n); }
 };
 
 // Vector class that cannot be resized after construction
@@ -311,27 +319,73 @@ ostream &operator<<(ostream &os, const Vector &v) {
 }
 
 class Matrix : public FixedLengthVector<Vector> {
-	size_t _m, _n;
-
 	void check_same_shape(const Matrix &oth) const {
 		if (shape() != oth.shape()) throw domain_error(Formatter() << "matrix shapes " << shape() << " and " << oth.shape() << " do not match");
 	}
-
 public:
-	Matrix(size_t m, size_t n) : FixedLengthVector<Vector>(m, Vector(n)), _m{m}, _n{n} {}
+	const size_t m, n;
 
-	size_t m() const { return _m; }
-	size_t n() const { return _n; }
-	pair<size_t, size_t> shape() const { return {_m, _n}; }
-	size_t size() const { return _m * _n; }
+	Matrix(size_t m, size_t n) : FixedLengthVector<Vector>(m, Vector(n)), m{m}, n{n} {}
 
-	GF operator()(size_t i, size_t j) const { return this->at(i).at(j); }
+	pair<size_t, size_t> shape() const { return {m, n}; }
+	size_t size() const { return m * n; }
+
+	Vector& operator()(size_t i) { return this->FixedLengthVector<Vector>::operator()(i); }
+	const Vector& operator()(size_t i) const { return this->FixedLengthVector<Vector>::operator()(i); }
+	GF& operator()(size_t i, size_t j) { return (*this)(i)(j); }
+	const GF& operator()(size_t i, size_t j) const { return (*this)(i)(j); }
 	Vector& row(size_t i) { return this->at(i); }
 	const Vector& row(size_t i) const { return this->at(i); }
 	Vector col(size_t j) const {
-		Vector cv(_m);
+		Vector cv(m);
 		transform(begin(), end(), cv.begin(), [&](const auto &rv){ return rv.at(j); });
 		return cv;
+	}
+
+	// reduced row echelon form in place
+	// returns rank
+	size_t rref() {
+		size_t i = 0;
+		for (size_t j=0; j<n; ++j) {
+			size_t ii = i;
+			while (ii < m && (*this)(ii, j) == 0) ++ii;
+			if (ii < m) {
+				(*this)(i).swap((*this)(ii));
+				(*this)(i) /= (*this)(i, j);
+				for (auto &rv : (*this)) {
+					if (&rv != &(*this)(i)) {
+						rv -= rv(j) * (*this)(i);
+					}
+				}
+				++i;
+			}
+		}
+		return i;
+	}
+
+	// returns (solvable, solution)
+	pair<bool, Vector> solve(const Vector &b) const {
+		if (b.size() != n) throw domain_error(Formatter() << "vector of size " << b.size() << " does not match column vectors of matrix with shape " << shape());
+		Matrix aug(m, n+1);
+		for (size_t i=0; i<m; ++i) {
+			for (size_t j=0; j<n; ++j) {
+				aug(i, j) = (*this)(i,j);
+			}
+			aug(i, n) = b(i);
+		}
+		size_t rank = aug.rref();
+		Vector solution(n);
+		bool solvable = aug(rank).back() && none_of(aug(rank).begin(), aug(rank).end()-1, identity());
+		if (solvable) {
+			size_t j = 0;
+			for (size_t i=0; i<m; ++i) {
+				while (j < n && !aug(i, j)) ++j;
+				if (j < n) {
+					solution(j) = aug(i, n);
+				}
+			}
+		}
+		return {solvable, solution};
 	}
 
 	Matrix& operator-=(const Matrix &rhs) {
@@ -340,7 +394,6 @@ public:
 		return *this;
 	}
 	Matrix& operator+=(const Matrix &rhs) { return *this -= rhs; }
-	Matrix& operator*=(const Matrix &rhs) { return *this = *this * rhs; }
 	// Matrix and Vector addition / subtraction are row-wise
 	Matrix& operator-=(const Vector &rhs) { for (auto &v : *this) v -= rhs; return *this; }
 	Matrix& operator+=(const Vector &rhs) { for (auto &v : *this) v += rhs; return *this; }
@@ -369,22 +422,22 @@ public:
 	friend ostream &operator<<(ostream &os, const Matrix &m);
 };
 Vector operator*(const Matrix &lhs, const Vector &rhs) {
-	Vector cv(lhs._m);
+	Vector cv(lhs.m);
 	transform(lhs.begin(), lhs.end(), cv.begin(), [&](const auto &rv){ return rv * rhs; });
 	return cv;
 }
 Vector operator*(const Vector &lhs, const Matrix &rhs) {
-	Vector rv(rhs._n);
+	Vector rv(rhs.n);
 	for (size_t j=0; j<rv.size(); ++j) {
 		rv[j] = lhs * rhs.col(j);
 	}
 	return rv;
 }
 Matrix operator*(const Matrix &lhs, const Matrix &rhs) {
-	if (lhs._n != rhs._m) throw domain_error(Formatter() << "matrix shapes " << lhs.shape() << " and " << rhs.shape() << " cannot be multiplied");
-	Matrix result(lhs._m, rhs._n);
-	for (size_t i=0; i<result._m; ++i) {
-		for (size_t j=0; j<result._n; ++j) {
+	if (lhs.n != rhs.m) throw domain_error(Formatter() << "matrix shapes " << lhs.shape() << " and " << rhs.shape() << " cannot be multiplied");
+	Matrix result(lhs.m, rhs.n);
+	for (size_t i=0; i<result.m; ++i) {
+		for (size_t j=0; j<result.n; ++j) {
 			result(i, j) = lhs.row(i) * rhs.col(j);
 		}
 	}
