@@ -47,6 +47,12 @@ public:
 } display_options{nullptr};
 DisplayOptions::DisplayOptions() : DisplayOptions(display_options) {}
 
+const string& to_string(const string &s) {return s;}
+template <typename T> auto make_value(T &value, bool set_default=!is_same<bool,T>::value) {
+	if (set_default) return cxxopts::value<T>(value)->default_value(to_string(value));
+	return cxxopts::value<T>(value);
+}
+
 enum Direction {
 	NW = 1,
 	N = 2,
@@ -331,12 +337,6 @@ void read_grid(istream &is, vector<vector<char>> *grid) {
 		}
 		assert(grid->back().size() == grid->front().size());
 	}
-}
-
-string to_string(const string &s) {return s;}
-template <typename T> auto make_value(T &value, bool set_default=!is_same<bool,T>::value) {
-	if (set_default) return cxxopts::value<T>(value)->default_value(to_string(value));
-	return cxxopts::value<T>(value);
 }
 
 int main(int argc, char *argv[]) {
