@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -51,6 +52,11 @@ public:
 	operator string() const { return ss.str(); }
 	string str() const { return *this; }
 };
+template<typename A, typename B>
+ostream& operator<<(ostream& os, const pair<A, B> &p) {
+	os << "(" << p.first << ", " << p.second << ")";
+	return os;
+}
 
 class GF {
 	uint8_t v;
@@ -144,7 +150,7 @@ public:
 
 	Poly& operator-=(const Poly &rhs) {
 		if (size() < rhs.size()) resize(rhs.size());
-		transform(rhs.begin(), rhs.end(), begin(), begin(), minus<GF>());
+		transform(begin(), end(), rhs.begin(), begin(), minus<GF>());
 		return *this;
 	}
 	Poly& operator+=(const Poly &rhs) { return *this -= rhs; }
@@ -205,34 +211,54 @@ ostream &operator<<(ostream &os, const Poly &p) {
 	return os;
 }
 
-class Vector : private vector<GF> {
+template<typename T>
+class FixedLengthVector : protected vector<T> {
+protected:
+	template<typename ...Args>
+	explicit FixedLengthVector(Args &&...args) : vector<T>(forward<Args>(args)...) {}
+public:
+	auto begin() { return vector<T>::begin(); }
+	auto begin() const { return vector<T>::begin(); }
+	auto end() { return vector<T>::end(); }
+	auto end() const { return vector<T>::end(); }
+	auto rbegin() { return vector<T>::rbegin(); }
+	auto rbegin() const { return vector<T>::rbegin(); }
+	auto rend() { return vector<T>::rend(); }
+	auto rend() const { return vector<T>::rend(); }
+	auto cbegin() const { return vector<T>::cbegin(); }
+	auto cend() const { return vector<T>::cend(); }
+	auto crbegin() const { return vector<T>::crbegin(); }
+	auto crend() const { return vector<T>::crend(); }
+	auto size() const { return vector<T>::size(); }
+	auto empty() const { return vector<T>::empty(); }
+	auto& operator[](size_t n) { return vector<T>::operator[](n); }
+	auto& operator[](size_t n) const { return vector<T>::operator[](n); }
+	auto& at(size_t n) { return vector<T>::at(n); }
+	auto& at(size_t n) const { return vector<T>::at(n); }
+	auto& front() { return vector<T>::front(); }
+	auto& front() const { return vector<T>::front(); }
+	auto& back() { return vector<T>::back(); }
+	auto& back() const { return vector<T>::back(); }
+	auto& data() { return vector<T>::data(); }
+	auto& data() const { return vector<T>::data(); }
+};
+
+// Vector class that cannot be resized after construction
+class Vector : public FixedLengthVector<GF> {
 	friend class Matrix;
 
-	template<typename ...Args>
-	explicit Vector(Args &&...args) : vector<GF>(forward<Args>(args)...) {}
+	void check_same_shape(const Vector &oth) const {
+		if (size() != oth.size()) throw domain_error(Formatter() << "vector sizes " << size() << " and " << oth.size() << " don't match");
+	}
 
-	auto begin() { return vector<GF>::begin(); }
-	auto begin() const { return vector<GF>::begin(); }
-	auto end() { return vector<GF>::end(); }
-	auto end() const { return vector<GF>::end(); }
-	auto rbegin() { return vector<GF>::rbegin(); }
-	auto rbegin() const { return vector<GF>::rbegin(); }
-	auto rend() { return vector<GF>::rend(); }
-	auto rend() const { return vector<GF>::rend(); }
-	auto cbegin() const { return vector<GF>::cbegin(); }
-	auto cend() const { return vector<GF>::cend(); }
-	auto crbegin() const { return vector<GF>::crbegin(); }
-	auto crend() const { return vector<GF>::crend(); }
-	auto size() const { return vector<GF>::size(); }
-	auto empty() const { return vector<GF>::empty(); }
-	auto operator[](size_t n) { return vector<GF>::operator[](n); }
-	auto operator[](size_t n) const { return vector<GF>::operator[](n); }
-	auto data() { return vector<GF>::data(); }
-	auto data() const { return vector<GF>::data(); }
+
+public:
+	template<typename ...Args>
+	explicit Vector(Args &&...args) : FixedLengthVector<GF>(forward<Args>(args)...) {}
 
 	Vector& operator-=(const Vector &rhs) {
-		if (size() != rhs.size()) throw domain_error(Formatter() << "vector sizes " << size() << " and " << rhs.size() << " don't match");
-		transform(rhs.begin(), rhs.end(), begin(), begin(), minus<GF>());
+		check_same_shape(rhs);
+		transform(begin(), end(), rhs.begin(), begin(), minus<GF>());
 		return *this;
 	}
 	Vector& operator+=(const Vector &rhs) { return *this -= rhs; }
@@ -243,6 +269,8 @@ class Vector : private vector<GF> {
 
 	friend Vector operator-(const Vector &lhs, const Vector &rhs);
 	friend Vector operator+(const Vector &lhs, const Vector &rhs);
+	friend GF operator*(const Vector &lhs, const Vector &rhs);
+
 	friend Vector operator-(const GF &lhs, const Vector &rhs);
 	friend Vector operator-(const Vector &lhs, const GF &rhs);
 	friend Vector operator+(const GF &lhs, const Vector &rhs);
@@ -256,6 +284,14 @@ class Vector : private vector<GF> {
 };
 Vector operator-(const Vector &lhs, const Vector &rhs) { return Vector(lhs) -= rhs; }
 Vector operator+(const Vector &lhs, const Vector &rhs) { return Vector(lhs) += rhs; }
+GF operator*(const Vector &lhs, const Vector &rhs) {
+	lhs.check_same_shape(rhs);
+	GF s = 0;
+	for (size_t i=0; i<lhs.size(); ++i) {
+		s -= lhs[i] * rhs[i];
+	}
+	return s;
+}
 Vector operator-(const GF &lhs, const Vector &rhs) { return Vector(rhs) -= lhs; }
 Vector operator-(const Vector &lhs, const GF &rhs) { return Vector(lhs) -= rhs; }
 Vector operator+(const GF &lhs, const Vector &rhs) { return Vector(rhs) += lhs; }
@@ -265,9 +301,111 @@ Vector operator*(const Vector &lhs, const GF &rhs) { return Vector(lhs) *= rhs; 
 Vector operator/(const GF &lhs, const Vector &rhs) { return Vector(rhs) /= lhs; }
 Vector operator/(const Vector &lhs, const GF &rhs) { return Vector(lhs) /= rhs; }
 ostream &operator<<(ostream &os, const Vector &v) {
-	os << "Vector[";
+	os << "[";
 	for (auto it = v.begin(); it != v.end(); ++it) {
-		if (it != v.begin()) os << ",";
+		if (it != v.begin()) os << " ";
+		os << setw(3) << *it;
+	}
+	os << "]";
+	return os;
+}
+
+class Matrix : public FixedLengthVector<Vector> {
+	size_t _m, _n;
+
+	void check_same_shape(const Matrix &oth) const {
+		if (shape() != oth.shape()) throw domain_error(Formatter() << "matrix shapes " << shape() << " and " << oth.shape() << " do not match");
+	}
+
+public:
+	Matrix(size_t m, size_t n) : FixedLengthVector<Vector>(m, Vector(n)), _m{m}, _n{n} {}
+
+	size_t m() const { return _m; }
+	size_t n() const { return _n; }
+	pair<size_t, size_t> shape() const { return {_m, _n}; }
+	size_t size() const { return _m * _n; }
+
+	GF operator()(size_t i, size_t j) const { return this->at(i).at(j); }
+	Vector& row(size_t i) { return this->at(i); }
+	const Vector& row(size_t i) const { return this->at(i); }
+	Vector col(size_t j) const {
+		Vector cv(_m);
+		transform(begin(), end(), cv.begin(), [&](const auto &rv){ return rv.at(j); });
+		return cv;
+	}
+
+	Matrix& operator-=(const Matrix &rhs) {
+		check_same_shape(rhs);
+		transform(begin(), end(), rhs.begin(), begin(), minus<Vector>());
+		return *this;
+	}
+	Matrix& operator+=(const Matrix &rhs) { return *this -= rhs; }
+	Matrix& operator*=(const Matrix &rhs) { return *this = *this * rhs; }
+	// Matrix and Vector addition / subtraction are row-wise
+	Matrix& operator-=(const Vector &rhs) { for (auto &v : *this) v -= rhs; return *this; }
+	Matrix& operator+=(const Vector &rhs) { for (auto &v : *this) v += rhs; return *this; }
+	Matrix& operator-=(const GF &rhs) { for (auto &v : *this) v -= rhs; return *this; }
+	Matrix& operator+=(const GF &rhs) { for (auto &v : *this) v += rhs; return *this; }
+	Matrix& operator*=(const GF &rhs) { for (auto &v : *this) v *= rhs; return *this; }
+	Matrix& operator/=(const GF &rhs) { for (auto &v : *this) v /= rhs; return *this; }
+
+	friend Matrix operator*(const Matrix &lhs, const Matrix &rhs);
+	friend Vector operator*(const Matrix &lhs, const Vector &rhs);
+	friend Vector operator*(const Vector &lhs, const Matrix &rhs);
+
+	friend Matrix operator-(const Vector &lhs, const Matrix &rhs);
+	friend Matrix operator-(const Matrix &lhs, const Vector &rhs);
+	friend Matrix operator+(const Vector &lhs, const Matrix &rhs);
+	friend Matrix operator+(const Matrix &lhs, const Vector &rhs);
+	friend Matrix operator-(const GF &lhs, const Matrix &rhs);
+	friend Matrix operator-(const Matrix &lhs, const GF &rhs);
+	friend Matrix operator+(const GF &lhs, const Matrix &rhs);
+	friend Matrix operator+(const Matrix &lhs, const GF &rhs);
+	friend Matrix operator*(const GF &lhs, const Matrix &rhs);
+	friend Matrix operator*(const Matrix &lhs, const GF &rhs);
+	friend Matrix operator/(const GF &lhs, const Matrix &rhs);
+	friend Matrix operator/(const Matrix &lhs, const GF &rhs);
+
+	friend ostream &operator<<(ostream &os, const Matrix &m);
+};
+Vector operator*(const Matrix &lhs, const Vector &rhs) {
+	Vector cv(lhs._m);
+	transform(lhs.begin(), lhs.end(), cv.begin(), [&](const auto &rv){ return rv * rhs; });
+	return cv;
+}
+Vector operator*(const Vector &lhs, const Matrix &rhs) {
+	Vector rv(rhs._n);
+	for (size_t j=0; j<rv.size(); ++j) {
+		rv[j] = lhs * rhs.col(j);
+	}
+	return rv;
+}
+Matrix operator*(const Matrix &lhs, const Matrix &rhs) {
+	if (lhs._n != rhs._m) throw domain_error(Formatter() << "matrix shapes " << lhs.shape() << " and " << rhs.shape() << " cannot be multiplied");
+	Matrix result(lhs._m, rhs._n);
+	for (size_t i=0; i<result._m; ++i) {
+		for (size_t j=0; j<result._n; ++j) {
+			result(i, j) = lhs.row(i) * rhs.col(j);
+		}
+	}
+	return result;
+}
+Matrix operator-(const Vector &lhs, const Matrix &rhs) { return Matrix(rhs) -= lhs; }
+Matrix operator-(const Matrix &lhs, const Vector &rhs) { return Matrix(lhs) -= rhs; }
+Matrix operator+(const Vector &lhs, const Matrix &rhs) { return Matrix(rhs) += lhs; }
+Matrix operator+(const Matrix &lhs, const Vector &rhs) { return Matrix(lhs) += rhs; }
+Matrix operator-(const GF &lhs, const Matrix &rhs) { return Matrix(rhs) -= lhs; }
+Matrix operator-(const Matrix &lhs, const GF &rhs) { return Matrix(lhs) -= rhs; }
+Matrix operator+(const GF &lhs, const Matrix &rhs) { return Matrix(rhs) += lhs; }
+Matrix operator+(const Matrix &lhs, const GF &rhs) { return Matrix(lhs) += rhs; }
+Matrix operator*(const GF &lhs, const Matrix &rhs) { return Matrix(rhs) *= lhs; }
+Matrix operator*(const Matrix &lhs, const GF &rhs) { return Matrix(lhs) *= rhs; }
+Matrix operator/(const GF &lhs, const Matrix &rhs) { return Matrix(rhs) /= lhs; }
+Matrix operator/(const Matrix &lhs, const GF &rhs) { return Matrix(lhs) /= rhs; }
+ostream &operator<<(ostream &os, const Matrix &m) {
+	os << "[";
+	for (auto it = m.begin(); it != m.end(); ++it) {
+		if (it != m.begin()) os << "\n ";
 		os << *it;
 	}
 	os << "]";
