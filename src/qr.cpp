@@ -294,7 +294,7 @@ public:
 
 	// returns (solvable, solution)
 	pair<bool, Vector> solve(const Vector &b) const {
-		if (b.size() != n) throw domain_error(Formatter() << "vector of size " << b.size() << " does not match column vectors of matrix with shape " << shape());
+		if (b.size() != m) throw domain_error(Formatter() << "vector of size " << b.size() << " does not match column vectors of matrix with shape " << shape());
 		Matrix aug(m, n+1);
 		for (size_t i=0; i<m; ++i) {
 			for (size_t j=0; j<n; ++j) {
@@ -304,7 +304,7 @@ public:
 		}
 		size_t rank = aug.rref();
 		Vector solution(n);
-		bool solvable = aug(rank).back() && none_of(aug(rank).begin(), aug(rank).end()-1, identity());
+		bool solvable = !(aug(rank - 1).back() && none_of(aug(rank - 1).begin(), aug(rank - 1).end()-1, identity()));
 		if (solvable) {
 			size_t j = 0;
 			for (size_t i=0; i<m; ++i) {
@@ -406,7 +406,7 @@ public:
 		Poly p;
 		for (size_t i=0; i<64; ++i) {
 			if (bin & (1LL << i)) {
-				p.resize(i);
+				p.resize(i + 1);
 				p.back() = 1;
 			}
 		}
@@ -533,9 +533,9 @@ public:
 		Vector b_err(mat_err.m);
 		for (size_t i=0; i<mat_err.m; ++i) {
 			for (size_t j=0; j<mat_err.n; ++j) {
-				mat_err(i, j) = syndromes(i + j);
+				mat_err(i, j) = GF::antilog(locations[j]).pow(1 + i);
 			}
-			b_err(i) = syndromes(nu + i);
+			b_err(i) = syndromes(i);
 		}
 		auto [err_solvable, err_coefs] = mat_err.solve(b_err);
 		if (!err_solvable) throw runtime_error("could not solve for error values");
@@ -1093,7 +1093,7 @@ int main(int argc, char *argv[]) {
 		("d,debug", "show debugging steps", make_value(options.debug))
 		("path", "text file representing QR code (default: stdin)", make_value(options.path), "PATH")
 		;
-	argparse.parse_positional({"grid"});
+	argparse.parse_positional({"path"});
 	argparse.allow_unrecognised_options();
 	string positional_help = "[PATH]";
 	argparse.positional_help(positional_help);
