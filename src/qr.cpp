@@ -634,6 +634,10 @@ class QR {
 	static const Poly FORMAT_GENERATOR_POLYNOMIAL;
 	static constexpr int FORMAT_BITS = 15;
 	static constexpr uint16_t FORMAT_MASK = 0b101010000010010;
+	// bytes
+	static constexpr int PAD_BYTES[] = {236, 17};
+	static constexpr size_t ALPHANUMERIC_SIZE = 45;
+	static constexpr char ALPHANUMERIC_TABLE[ALPHANUMERIC_SIZE + 1] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:";
 	// offsets in grid
 	static constexpr int FINDER_WIDTH = 8;
 	static constexpr int ALIGNMENT = 6;
@@ -867,12 +871,101 @@ public:
 			p.resize(versionlevel.datawords);
 			transform(p.rbegin(), p.rend(), back_inserter(datawords), [](GF x) { return x(); });
 		}
-		return decode(datawords);
+		return decode(datawords, v);
 	}
 
-	static string decode(const vector<uint8_t> &datawords) {
+	static string decode(const vector<uint8_t> &datawords, size_t version) {
 		ostringstream os;
-		// TODO
+		uint64_t buffer = 0;
+		size_t bit_length = 0;
+		size_t index = 0;
+		auto read = [&](size_t n) {
+			while (n < bit_length) {
+				buffer <<= 8;
+				buffer |= datawords.at(index++);
+				bit_length += 8;
+			}
+			uint64_t value = buffer & ((1 << bit_length) - 1);
+			value >>= bit_length - n;
+			bit_length -= n;
+			return value;
+		};
+		size_t versionset = version < 10 ? 0 : version < 27 ? 1 : 2;
+		uint8_t mode = 0;
+		size_t length = 0;
+		while (index < datawords.size()) {
+			if (length) {
+				switch (mode) {
+				case 0b0001: { // numeric
+						size_t digits = min((size_t) 3, length);
+						uint64_t v = read(3 * digits + 1);
+						length -= digits;
+						os << setfill('0') << setw(digits) << v;
+					}
+					break;
+				case 0b0010: { // alphanumeric
+						size_t chars = min((size_t) 2, length);
+						uint64_t v = read(5 * chars + 1);
+						length -= chars;
+						for (size_t i=0; i<chars; ++i) {
+							uint64_t vv = v;
+							for (size_t ii=0; ii<chars; ++ii) vv /= ALPHANUMERIC_SIZE;
+							os << ALPHANUMERIC_TABLE[vv % ALPHANUMERIC_SIZE];
+						}
+					}
+					break;
+				case 0b0100: { // byte
+						char c = read(8);
+						os << c;
+						--length;
+					}
+					break;
+				case 0b1000: { // kanji
+						// character range 0x8140-0x9ffc has offset 0x8140
+						// character range 0xe040-0xebbf has offset 0xc140
+						wchar_t wc;
+						wc = read(13);
+						if (wc >= 0x1f00) wc += 0xc140;
+						else wc += 0x8140;
+						os << wc;
+					}
+					break;
+				default:
+					throw runtime_error(Formatter() << "unsupported mode " << mode);
+					break;
+				}
+			} else {
+				// new mode
+				mode = read(4);
+				switch (mode) {
+				case 0b0000: { // terminator
+						// skip to end
+						index = datawords.size();
+					}
+					break;
+				case 0b0001: { // numeric
+						length = read(array{10, 12, 14}.at(versionset));
+					}
+					break;
+				case 0b0010: { // alphanumeric
+						length = read(array{9, 11, 13}.at(versionset));
+					}
+					break;
+				case 0b0100: { // byte
+						length = read(array{8, 16, 16}.at(versionset));
+					}
+					break;
+				case 0b1000: { // kanji
+						length = read(array{8, 10, 12}.at(versionset));
+					}
+					break;
+				case 0b0111: // ECI
+				default:
+					throw runtime_error(Formatter() << "unsupported mode " << mode);
+					break;
+				}
+			}
+		}
 		return os.str();
 	}
 
