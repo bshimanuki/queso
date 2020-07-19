@@ -563,11 +563,22 @@ ostream &operator<<(ostream &os, const Poly &p) {
 }
 
 
-enum class CellValue : uint8_t {
+enum class CellValue {
 	BLACK,
 	WHITE,
 	UNKNOWN,
 };
+CellValue operator-(const CellValue &v) {
+	switch (v) {
+	case CellValue::BLACK:
+		return CellValue::WHITE;
+	case CellValue::WHITE:
+		return CellValue::BLACK;
+	case CellValue::UNKNOWN:
+	default:
+		return CellValue::UNKNOWN;
+	}
+}
 
 class QR {
 	vector<vector<CellValue>> grid;
@@ -614,6 +625,7 @@ public:
 			case CellValue::WHITE:
 				return 0;
 			case CellValue::UNKNOWN:
+			default:
 				return 0.5;
 			}
 		};
@@ -633,12 +645,129 @@ public:
 		}
 		Poly p = Poly::FromBinary(guess);
 		p = p.error_correct(10);
-		uint16_t format = p.to_binary();
+		uint64_t format = p.to_binary();
+		if (format ^ (format & 0x7fff)) throw runtime_error(Formatter() << "computed invalid format string " << hex << format);
 		format ^= FORMAT_MASK;
 		return format >> 10;
 	}
 
-	CellValue function_pattern_value(size_t r, size_t c) {
+	void apply_mask(uint8_t mask) {
+		auto f = [mask](size_t r, size_t c) {
+			switch (mask) {
+			case 0:
+				return (r + c) % 2 == 0;
+			case 1:
+				return r % 2 == 0;
+			case 2:
+				return c % 2 == 0;
+			case 3:
+				return (r + c) % 3 == 0;
+			case 4:
+				return (r/2 + c/3) % 2 == 0;
+			case 5:
+				return (r * c) % 2 + (r * c) % 3 == 0;
+			case 6:
+				return ((r * c) % 2 + (r * c) % 3) % 2 == 0;
+			case 7:
+				return ((r + c) % 2 + (r * c) % 3) % 2 == 0;
+			default:
+				return false;
+			}
+		};
+		for (size_t r=0; r<n; ++r) {
+			for (size_t c=0; c<n; ++c) {
+				if (is_data_bit(r, c).first) {
+					if (f(r, c)) grid[r][c] = -grid[r][c];
+				}
+			}
+		}
+	}
+
+	// returns (codewords, erasures), without accounting for interleaving
+	// any masking should be done before this is called
+	pair<vector<uint8_t>, vector<size_t>> get_codewords() const {
+		vector<uint8_t> codewords;
+		vector<size_t> erasures;
+		uint8_t codeword = 0;
+		size_t bit = 0;
+		bool erasure = false;
+		size_t r = n - 1;
+		size_t c = n - 1;
+		bool right = true; // state for whether on right side of column pair
+		bool up = true; // state for whether on traversing upwards
+		while (c >= 0) {
+			if (c == ALIGNMENT) {
+				// shift and do not change column state
+				--c;
+				continue;
+			}
+			auto [is_data, value] = is_data_bit(r, c);
+			if (is_data) {
+				uint8_t v = 0;
+				switch (value) {
+				case CellValue::BLACK:
+					v = 1;
+					break;
+				case CellValue::WHITE:
+					break;
+				case CellValue::UNKNOWN:
+					erasure = true;
+					break;
+				}
+				codeword |= v << bit++;
+				if (bit == 8) {
+					if (erasure) erasures.push_back(codewords.size());
+					erasure = false;
+					codewords.push_back(codeword);
+					codeword = 0;
+					bit = 0;
+				}
+			}
+			c += right ? -1 : 1;
+			if (!right) {
+				if (up ? r == 0 : r == n - 1) {
+					up = !up;
+					c -= 2;
+				} else {
+					r += up ? -1 : 1;
+				}
+			}
+			right = !right;
+		}
+		return {codewords, erasures};
+	}
+
+	string solve() const {
+		uint8_t format = get_format();
+		uint8_t level = format >> 3;
+		uint8_t mask = format & 7;
+		QR qr(*this); // copy
+		qr.apply_mask(mask);
+		auto [codewords, erasures] = qr.get_codewords();
+		// TODO
+		return "";
+	}
+
+	bool is_format_bit(size_t r, size_t c) const {
+		if (r == ALIGNMENT || c == ALIGNMENT) return false;
+		if (r == FORMAT_OFFSET) {
+			if (c < FORMAT_SPLIT + 1) return true;
+			if (c >= n - (FORMAT_BITS - FORMAT_SPLIT)) return true;
+		}
+		if (c == FORMAT_OFFSET) {
+			if (r >= n - 1 - FORMAT_SPLIT) return true;
+			if (r < FORMAT_BITS - FORMAT_SPLIT) return true;
+		}
+		return false;
+	}
+
+	pair<bool, CellValue> is_data_bit(size_t r, size_t c) const {
+		CellValue value = function_pattern_value(r, c);
+		bool b = value == CellValue::UNKNOWN && !is_format_bit(r, c);
+		return {b, value};
+	}
+
+	CellValue function_pattern_value(size_t r, size_t c) const {
 		// dark module
 		if (r == n - FINDER_WIDTH) return CellValue::BLACK;
 		// top left finder pattern
@@ -763,4 +892,5 @@ int main(int argc, char *argv[]) {
 	}
 
 	QR qr(grid);
+	cout << qr.solve() << endl;;
 }
