@@ -24,6 +24,7 @@ constexpr char WHITE[] = " .0Oo_-";
 constexpr char UNKNOWN[] = "=?";
 constexpr char BLOCK[] = "█";
 
+
 class Options {
 public:
 	bool all_format_options = false;
@@ -35,11 +36,13 @@ public:
 
 } options{nullptr};
 
+
 const string& to_string(const string &s) {return s;}
 template <typename T> auto make_value(T &value, bool set_default=!is_same<bool,T>::value) {
 	if (set_default) return cxxopts::value<T>(value)->default_value(to_string(value));
 	return cxxopts::value<T>(value);
 }
+
 
 class Formatter {
 	ostringstream ss;
@@ -58,10 +61,12 @@ ostream& operator<<(ostream& os, const pair<A, B> &p) {
 	return os;
 }
 
+
 struct identity {
 	template<typename T>
 	constexpr	auto operator()(T&& v) const noexcept { return forward<T>(v); }
 };
+
 
 class GF {
 	uint8_t v;
@@ -84,9 +89,17 @@ private:
 		assert(x == 1);
 		return make_pair(log, antilog);
 	}();
-public:
 	static constexpr array<uint16_t, ORDER> LOG = _LOG_ANTILOG_PAIR.first;
 	static constexpr array<uint16_t, ORDER> ANTILOG = _LOG_ANTILOG_PAIR.second;
+public:
+	static uint8_t log(const GF &x) {
+		if (x == 0) throw domain_error("can't take log of 0");
+		return LOG[x.v];
+	}
+	static GF antilog(int e) {
+		e = ((e % SUBORDER) + SUBORDER) % SUBORDER;
+		return ANTILOG[e];
+	}
 
 	GF(uint8_t v=0) : v(v) {}
 	uint8_t operator()() const { return v; }
@@ -98,19 +111,19 @@ public:
 			if (e >= 0) return 0;
 			throw domain_error("inverse of 0");
 		}
-		return ANTILOG[((((int) LOG[v] * e) % SUBORDER) + SUBORDER) % SUBORDER];
+		return antilog(log(v) * e);
 	}
 	GF& operator-=(const GF &rhs) { v ^= rhs.v; return *this; }
 	GF& operator+=(const GF &rhs) { return *this -= rhs; }
 	GF& operator*=(const GF &rhs) {
 		if (v == 0 || rhs.v == 0) return *this = 0;
-		return *this = ANTILOG[(LOG[v] + LOG[rhs.v]) % SUBORDER];
+		return *this = antilog(log(v) + log(rhs.v));
 	}
 	GF& operator/=(const GF &rhs) { return *this *= rhs.inv(); }
 	GF operator-() const { return this->inv(); }
 	GF inv() const {
 		if (v == 0) throw domain_error("inverse of 0");
-		return GF(ANTILOG[SUBORDER - LOG[v]]);
+		return GF(antilog(SUBORDER - log(v)));
 	}
 
 	friend GF operator-(const GF &lhs, const GF &rhs);
@@ -127,106 +140,6 @@ GF operator*(const GF &lhs, const GF &rhs) { return GF(lhs) *= rhs; }
 GF operator/(const GF &lhs, const GF &rhs) { return GF(lhs) /= rhs; }
 ostream &operator<<(ostream &os, const GF &x) { return os << x.v; }
 
-// Polynomial = c0 + c1 * x + ... + c{n-1} * x^{n-1}, where Poly[i] = c{i}
-class Poly : public vector<GF> {
-public:
-	template<typename ...Args>
-	explicit Poly(Args &&...args) : vector<GF>(forward<Args>(args)...) {}
-	Poly(const GF &x) : vector<GF>(1, x) {}
-	static Poly Mono(size_t n, const GF &c=1) { Poly p = Poly(n); p.push_back(c); return p; }
-	static Poly FromBinary(uint64_t bin) {
-		Poly p;
-		for (size_t i=0; i<64; ++i) {
-			if (bin & (1LL << i)) {
-				p.resize(i);
-				p.back() = 1;
-			}
-		}
-		return p;
-	}
-
-	int deg() const {
-		auto it = rbegin();
-		while (it != rend() && !*it) ++it;
-		return rend() - it - (int) 1;
-	}
-
-	// remove leading 0 coefficients
-	void reduce() {
-		auto it = rbegin();
-		while (it != rend() && !*it) ++it;
-		erase(it.base(), end());
-	}
-	GF operator()(const GF &x) const {
-		GF y = 0;
-		for (size_t i=0; i<size(); ++i) y += (*this)[i] * x.pow(i);
-		return y;
-	}
-	// get coefficient, even if higher than the order of the polynomial
-	GF coef(size_t n) const { return n < size() ? (*this)[n] : 0; }
-
-	Poly& operator-=(const Poly &rhs) {
-		if (size() < rhs.size()) resize(rhs.size());
-		transform(begin(), end(), rhs.begin(), begin(), minus<GF>());
-		return *this;
-	}
-	Poly& operator+=(const Poly &rhs) { return *this -= rhs; }
-	Poly operator-() const { return Poly() - *this; }
-private:
-	static Poly mul(const Poly &lhs, const Poly &rhs) {
-		Poly p(lhs.size() + rhs.size() - 1);
-		for (size_t i=0; i<lhs.size(); ++i) {
-			for (size_t j=0; j<rhs.size(); ++j) {
-				p[i+j] += lhs[i] * rhs[j];
-			}
-		}
-		return p;
-	}
-	static void div(Poly *r, const Poly &b, Poly *q=nullptr) {
-		if (q) q->clear();
-		r->reduce();
-		if (b.deg() < 0) throw domain_error("divide by empty polynomial");
-		while (r->deg() >= b.deg()) {
-			GF coef = r->back() / b.back();
-			size_t deg = r->deg() - b.deg();
-			Poly multiple = (coef * b) << deg;
-			if (q) *q += Mono(deg, coef);
-			*r -= multiple;
-			r->reduce();
-		}
-	}
-public:
-	Poly& operator*=(const Poly &rhs) { return *this = mul(*this, rhs); }
-	Poly& operator/=(const Poly &rhs) { Poly q; div(this, rhs, &q); return *this = q; }
-	Poly& operator%=(const Poly &rhs) { div(this, rhs); return *this; }
-	Poly& operator<<=(size_t n) { insert(begin(), n, 0); return *this; }
-	Poly& operator>>=(size_t n) { erase(begin(), min(begin()+n, end())); return *this; }
-	Poly operator<<(size_t n) { Poly p(n); p.insert(p.end(), begin(), end()); return p; }
-	Poly operator>>(size_t n) { return Poly(min(begin()+n, end()), end()); }
-
-	friend Poly operator-(const Poly &lhs, const Poly &rhs);
-	friend Poly operator+(const Poly &lhs, const Poly &rhs);
-	friend Poly operator*(const Poly &lhs, const Poly &rhs);
-	friend Poly operator/(const Poly &lhs, const Poly &rhs);
-	friend Poly operator%(const Poly &lhs, const Poly &rhs);
-
-	explicit operator bool() const { return any_of(begin(), end(), identity()); }
-	friend ostream &operator<<(ostream &os, const Poly &p);
-};
-Poly operator-(const Poly &lhs, const Poly &rhs) { return Poly(lhs) -= rhs; }
-Poly operator+(const Poly &lhs, const Poly &rhs) { return Poly(lhs) += rhs; }
-Poly operator*(const Poly &lhs, const Poly &rhs) { return Poly::mul(lhs, rhs); }
-Poly operator/(const Poly &lhs, const Poly &rhs) { return Poly(lhs) /= rhs; }
-Poly operator%(const Poly &lhs, const Poly &rhs) { return Poly(lhs) %= rhs; }
-ostream &operator<<(ostream &os, const Poly &p) {
-	os << "Poly[";
-	for (auto it = p.begin(); it != p.end(); ++it) {
-		if (it != p.begin()) os << ",";
-		os << *it;
-	}
-	os << "]";
-	return os;
-}
 
 template<typename T>
 class FixedLengthVector : protected vector<T> {
@@ -263,6 +176,7 @@ public:
 	auto& operator()(size_t n) const { return at(n); }
 };
 
+
 // Vector class that cannot be resized after construction
 class Vector : public FixedLengthVector<GF> {
 	friend class Matrix;
@@ -271,11 +185,11 @@ class Vector : public FixedLengthVector<GF> {
 		if (size() != oth.size()) throw domain_error(Formatter() << "vector sizes " << size() << " and " << oth.size() << " don't match");
 	}
 
-
 public:
 	template<typename ...Args>
 	explicit Vector(Args &&...args) : FixedLengthVector<GF>(forward<Args>(args)...) {}
 
+	const vector<GF>& vector() const { return *this; }
 	Vector& operator-=(const Vector &rhs) {
 		check_same_shape(rhs);
 		transform(begin(), end(), rhs.begin(), begin(), minus<GF>());
@@ -329,6 +243,7 @@ ostream &operator<<(ostream &os, const Vector &v) {
 	os << "]";
 	return os;
 }
+
 
 class Matrix : public FixedLengthVector<Vector> {
 	void check_same_shape(const Matrix &oth) const {
@@ -477,6 +392,177 @@ ostream &operator<<(ostream &os, const Matrix &m) {
 	return os;
 }
 
+
+// Polynomial = c0 + c1 * x + ... + c{n-1} * x^{n-1}, where Poly[i] = c{i}
+class Poly : public vector<GF> {
+public:
+	template<typename ...Args>
+	explicit Poly(Args &&...args) : vector<GF>(forward<Args>(args)...) {}
+	Poly(const GF &x) : vector<GF>{x} {}
+	static Poly Mono(size_t n, const GF &c=1) { Poly p = Poly(n); p.push_back(c); return p; }
+	static Poly FromBinary(uint64_t bin) {
+		Poly p;
+		for (size_t i=0; i<64; ++i) {
+			if (bin & (1LL << i)) {
+				p.resize(i);
+				p.back() = 1;
+			}
+		}
+		return p;
+	}
+
+	int deg() const {
+		auto it = rbegin();
+		while (it != rend() && !*it) ++it;
+		return rend() - it - (int) 1;
+	}
+	void set(size_t n, const GF &c=1) {
+		if (n >= size()) resize(n);
+		(*this)[n] = c;
+	}
+
+	// remove leading 0 coefficients
+	void reduce() {
+		auto it = rbegin();
+		while (it != rend() && !*it) ++it;
+		erase(it.base(), end());
+	}
+	GF operator()(const GF &x) const {
+		GF y = 0;
+		for (size_t i=0; i<size(); ++i) y += (*this)[i] * x.pow(i);
+		return y;
+	}
+	// get coefficient, even if higher than the order of the polynomial
+	GF coef(size_t n) const { return n < size() ? (*this)[n] : 0; }
+
+	uint64_t to_binary() const {
+		if (deg() > 63) throw overflow_error(Formatter() << "polynomial with degree " << deg() << " does not fit in a 64 bit integer");
+		uint64_t bin = 0;
+		for(size_t i=0; i<=size(); ++i) {
+			if ((*this)[i] == 1) bin |= 1LL << i;
+			else if ((*this)[i]) throw domain_error(Formatter() << "polynomial cannot be converted to binary because the coefficient for x^" << i << " is " << (*this)[i]);
+		}
+		return bin;
+	}
+
+	Poly& operator-=(const Poly &rhs) {
+		if (size() < rhs.size()) resize(rhs.size());
+		transform(begin(), end(), rhs.begin(), begin(), minus<GF>());
+		return *this;
+	}
+	Poly& operator+=(const Poly &rhs) { return *this -= rhs; }
+	Poly operator-() const { return Poly() - *this; }
+private:
+	static Poly mul(const Poly &lhs, const Poly &rhs) {
+		Poly p(lhs.size() + rhs.size() - 1);
+		for (size_t i=0; i<lhs.size(); ++i) {
+			for (size_t j=0; j<rhs.size(); ++j) {
+				p[i+j] += lhs[i] * rhs[j];
+			}
+		}
+		return p;
+	}
+	static void div(Poly *r, const Poly &b, Poly *q=nullptr) {
+		if (q) q->clear();
+		r->reduce();
+		if (b.deg() < 0) throw domain_error("divide by empty polynomial");
+		while (r->deg() >= b.deg()) {
+			GF coef = r->back() / b.back();
+			size_t deg = r->deg() - b.deg();
+			Poly multiple = (coef * b) << deg;
+			if (q) *q += Mono(deg, coef);
+			*r -= multiple;
+			r->reduce();
+		}
+	}
+public:
+	Poly& operator*=(const Poly &rhs) { return *this = mul(*this, rhs); }
+	Poly& operator/=(const Poly &rhs) { Poly q; div(this, rhs, &q); return *this = q; }
+	Poly& operator%=(const Poly &rhs) { div(this, rhs); return *this; }
+	Poly& operator<<=(size_t n) { insert(begin(), n, 0); return *this; }
+	Poly& operator>>=(size_t n) { erase(begin(), min(begin()+n, end())); return *this; }
+	Poly operator<<(size_t n) { Poly p(n); p.insert(p.end(), begin(), end()); return p; }
+	Poly operator>>(size_t n) { return Poly(min(begin()+n, end()), end()); }
+
+	friend Poly operator-(const Poly &lhs, const Poly &rhs);
+	friend Poly operator+(const Poly &lhs, const Poly &rhs);
+	friend Poly operator*(const Poly &lhs, const Poly &rhs);
+	friend Poly operator/(const Poly &lhs, const Poly &rhs);
+	friend Poly operator%(const Poly &lhs, const Poly &rhs);
+
+	static Poly generator(size_t n) {
+		if (n > GF::SUBORDER) throw overflow_error(Formatter() << "cannot create generator for size " << n);
+		Poly gen = GF(1);
+		for (size_t i=0; i<n; ++i) {
+			// A^i + 1
+			gen *= Poly(initializer_list<GF>{GF::antilog(i), 1});
+		}
+		return gen;
+	}
+
+	// perform error correction
+	// err_codewords: number of error correcting code words
+	// erasures: positions of known erasures
+	Poly error_correct(size_t err_codewords, const vector<size_t> &erasures={}) const {
+		Poly gen = generator(err_codewords);
+		Vector syndromes(err_codewords);
+		for (size_t i=0; i<err_codewords; ++i) syndromes[i] = (*this)(GF::antilog(i));
+		// TODO: erasures
+		size_t nu = err_codewords / 2; // number of corrections
+		Matrix mat_locator(nu, nu);
+		Vector b_locator(mat_locator.m);
+		for (size_t i=0; i<mat_locator.m; ++i) {
+			for (size_t j=0; j<mat_locator.n; ++j) {
+				mat_locator(i, j) = syndromes(i + j);
+			}
+			b_locator(i) = syndromes(nu + i);
+		}
+		auto [locator_solvable, locator_coefs] = mat_locator.solve(b_locator);
+		if (!locator_solvable) throw runtime_error("could not solve for locator polynomial");
+		Poly locator{1}; // initialize with constant term
+		// locator polynomial is in reverse order
+		locator.insert(locator.end(), locator_coefs.rbegin(), locator_coefs.rend());
+		vector<size_t> locations;
+		for (size_t i=0; i<GF::SUBORDER; ++i) {
+			if (locator(GF::antilog(i).inv()) == 0) locations.push_back(i);
+		}
+		nu = locations.size();
+		Matrix mat_err(err_codewords, nu);
+		Vector b_err(mat_err.m);
+		for (size_t i=0; i<mat_err.m; ++i) {
+			for (size_t j=0; j<mat_err.n; ++j) {
+				mat_err(i, j) = syndromes(i + j);
+			}
+			b_err(i) = syndromes(nu + i);
+		}
+		auto [err_solvable, err_coefs] = mat_err.solve(b_err);
+		if (!err_solvable) throw runtime_error("could not solve for error values");
+		Poly err;
+		for (size_t i=0; i<nu; ++i) {
+			err.set(locations[i], err_coefs[i]);
+		}
+		return (*this) - err;
+	}
+
+	explicit operator bool() const { return any_of(begin(), end(), identity()); }
+	friend ostream &operator<<(ostream &os, const Poly &p);
+};
+Poly operator-(const Poly &lhs, const Poly &rhs) { return Poly(lhs) -= rhs; }
+Poly operator+(const Poly &lhs, const Poly &rhs) { return Poly(lhs) += rhs; }
+Poly operator*(const Poly &lhs, const Poly &rhs) { return Poly::mul(lhs, rhs); }
+Poly operator/(const Poly &lhs, const Poly &rhs) { return Poly(lhs) /= rhs; }
+Poly operator%(const Poly &lhs, const Poly &rhs) { return Poly(lhs) %= rhs; }
+ostream &operator<<(ostream &os, const Poly &p) {
+	os << "Poly[";
+	for (auto it = p.begin(); it != p.end(); ++it) {
+		if (it != p.begin()) os << ",";
+		os << *it;
+	}
+	os << "]";
+	return os;
+}
+
+
 enum class CellValue : uint8_t {
 	BLACK,
 	WHITE,
@@ -503,6 +589,14 @@ class QR {
 
 	static const Poly VERSION_GENERATOR_POLYNOMIAL;
 	static const Poly FORMAT_GENERATOR_POLYNOMIAL;
+	static constexpr int FORMAT_BITS = 15;
+	static constexpr uint16_t FORMAT_MASK = 0b101010000010010;
+	// offsets in grid
+	static constexpr int FINDER_WIDTH = 8;
+	static constexpr int ALIGNMENT = 6;
+	static constexpr int ALIGNMENT_RADIUS = 2;
+	static constexpr int FORMAT_OFFSET = 8;
+	static constexpr int FORMAT_SPLIT = 7;
 public:
 	~QR() {};
 	QR(const vector<vector<CellValue>> &grid) : grid(grid) {
@@ -512,10 +606,39 @@ public:
 	}
 	QR(size_t n) : QR(vector<vector<CellValue>>(n, vector<CellValue>(n, CellValue::UNKNOWN))) {}
 
+	array<float, FORMAT_BITS> format_bit_proportions() const {
+		auto f = [](CellValue v) -> double {
+			switch(v) {
+			case CellValue::BLACK:
+				return 1;
+			case CellValue::WHITE:
+				return 0;
+			case CellValue::UNKNOWN:
+				return 0.5;
+			}
+		};
+		array<float, FORMAT_BITS> bits = {};
+		for (size_t c=0; c<FORMAT_SPLIT; ++c) bits[c] += f(grid[FORMAT_OFFSET][c + (c >= ALIGNMENT)]) / 2;
+		for (size_t c=FORMAT_SPLIT; c<FORMAT_BITS; ++c) bits[c] += f(grid[FORMAT_OFFSET][n - (FORMAT_BITS - c)]) / 2;
+		for (size_t r=0; r<FORMAT_SPLIT; ++r) bits[r] += f(grid[n - 1 - r][FORMAT_OFFSET]) / 2;
+		for (size_t r=FORMAT_SPLIT; r<FORMAT_BITS; ++r) bits[r] += f(grid[FORMAT_BITS - 1 - r + (FORMAT_BITS - 1 - r >= ALIGNMENT)][FORMAT_OFFSET]) / 2;
+		return bits;
+	}
+
+	uint8_t get_format() const {
+		auto bits = format_bit_proportions();
+		uint16_t guess = 0;
+		for (size_t i=0; i<bits.size(); ++i) {
+			if (bits[i] > 0.5) guess |= 1 << i;
+		}
+		Poly p = Poly::FromBinary(guess);
+		p = p.error_correct(10);
+		uint16_t format = p.to_binary();
+		format ^= FORMAT_MASK;
+		return format >> 10;
+	}
+
 	CellValue function_pattern_value(size_t r, size_t c) {
-		constexpr int FINDER_WIDTH = 8;
-		constexpr int ALIGNMENT = 6;
-		constexpr int ALIGNMENT_RADIUS = 2;
 		// dark module
 		if (r == n - FINDER_WIDTH) return CellValue::BLACK;
 		// top left finder pattern
@@ -586,6 +709,7 @@ const Poly QR::VERSION_GENERATOR_POLYNOMIAL = Poly::FromBinary(0b1111100100101);
 // x^10 + x^8 + x^5 + x^4 + x^2 + x + 1
 const Poly QR::FORMAT_GENERATOR_POLYNOMIAL = Poly::FromBinary(0b10100110111);
 
+
 vector<vector<CellValue>> read_grid(istream &is) {
 	unordered_map<char, CellValue> symbol_table;
 	for (char c : BLACK) symbol_table[c] = CellValue::BLACK;
@@ -604,6 +728,7 @@ vector<vector<CellValue>> read_grid(istream &is) {
 	}
 	return grid;
 }
+
 
 int main(int argc, char *argv[]) {
 	ostringstream helptext;
