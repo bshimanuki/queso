@@ -21,7 +21,7 @@ using namespace std;
 
 constexpr char BLACK[] = "1#+*@Xx";
 constexpr char WHITE[] = " .0Oo_-";
-constexpr char ERASURE[] = "=?";
+constexpr char UNKNOWN[] = "=?";
 constexpr char BLOCK[] = "█";
 
 class Options {
@@ -133,7 +133,17 @@ public:
 	template<typename ...Args>
 	explicit Poly(Args &&...args) : vector<GF>(forward<Args>(args)...) {}
 	Poly(const GF &x) : vector<GF>(1, x) {}
-	static Poly mono(size_t n, const GF &c=1) { Poly p = Poly(n); p.push_back(c); return p; }
+	static Poly Mono(size_t n, const GF &c=1) { Poly p = Poly(n); p.push_back(c); return p; }
+	static Poly FromBinary(uint64_t bin) {
+		Poly p;
+		for (size_t i=0; i<64; ++i) {
+			if (bin & (1LL << i)) {
+				p.resize(i);
+				p.back() = 1;
+			}
+		}
+		return p;
+	}
 
 	int deg() const {
 		auto it = rbegin();
@@ -152,6 +162,8 @@ public:
 		for (size_t i=0; i<size(); ++i) y += (*this)[i] * x.pow(i);
 		return y;
 	}
+	// get coefficient, even if higher than the order of the polynomial
+	GF coef(size_t n) const { return n < size() ? (*this)[n] : 0; }
 
 	Poly& operator-=(const Poly &rhs) {
 		if (size() < rhs.size()) resize(rhs.size());
@@ -178,7 +190,7 @@ private:
 			GF coef = r->back() / b.back();
 			size_t deg = r->deg() - b.deg();
 			Poly multiple = (coef * b) << deg;
-			if (q) *q += mono(deg, coef);
+			if (q) *q += Mono(deg, coef);
 			*r -= multiple;
 			r->reduce();
 		}
@@ -468,34 +480,117 @@ ostream &operator<<(ostream &os, const Matrix &m) {
 enum class CellValue : uint8_t {
 	BLACK,
 	WHITE,
-	ERASURE,
+	UNKNOWN,
 };
 
 class QR {
 	vector<vector<CellValue>> grid;
 	size_t n;
 	int v;
+
+	void validate() const {
+		for (size_t i=0; i<grid.size(); ++i) {
+			if (grid[i].size() != grid.size()) {
+				throw runtime_error(Formatter() << "QR code has " << grid.size() << " rows but row " << (i+1) << " has " << grid[i].size() << " columns");
+			}
+		}
+		if (grid.size() != n) throw runtime_error(Formatter() << "QR code of size " << grid.size() << " does not match specified size of " << n);
+		if (v != (int) n / 4 - 4) throw runtime_error(Formatter() << "QR code version number " << v << " does not match grid size " << n);
+		if (n % 4 != 1 || v < 1 || v > 40) {
+			throw runtime_error(Formatter() << "QR code is " << n << "x" << n << " but " << n << " is not a valid size");
+		}
+	}
+
+	static const Poly VERSION_GENERATOR_POLYNOMIAL;
+	static const Poly FORMAT_GENERATOR_POLYNOMIAL;
 public:
 	~QR() {};
 	QR(const vector<vector<CellValue>> &grid) : grid(grid) {
 		n = grid.size();
 		v = n / 4 - 4;
-		if (n % 4 != 1 || v < 1 || v > 40) {
-			throw runtime_error(Formatter() << "QR code has " << n << " rows but " << n << " is not a valid size");
-		}
-		for (size_t i=0; i<grid.size(); ++i) {
-			if (grid[i].size() != n) {
-				throw runtime_error(Formatter() << "QR code has " << n << " rows but row " << (i+1) << " has " << grid[i].size() << " columns");
+		validate();
+	}
+	QR(size_t n) : QR(vector<vector<CellValue>>(n, vector<CellValue>(n, CellValue::UNKNOWN))) {}
+
+	CellValue function_pattern_value(size_t r, size_t c) {
+		constexpr int FINDER_WIDTH = 8;
+		constexpr int ALIGNMENT = 6;
+		constexpr int ALIGNMENT_RADIUS = 2;
+		// dark module
+		if (r == n - FINDER_WIDTH) return CellValue::BLACK;
+		// top left finder pattern
+		if (r < FINDER_WIDTH && c < FINDER_WIDTH) {
+			switch (max(abs((int)r-3), abs((int)c-3))) {
+			case 2:
+			case 4:
+				return CellValue::WHITE;
+			default:
+				return CellValue::BLACK;
 			}
 		}
+		// top right / bottom left finder patterns
+		if (min(r, c) < FINDER_WIDTH && max(r, c) >= n - FINDER_WIDTH) {
+			return function_pattern_value(min(r, n - 1 - r), min(c, n - 1 - c));
+		}
+		// timing patterns
+		if (r == ALIGNMENT) return c % 2 ? CellValue::BLACK : CellValue::WHITE;
+		if (c == ALIGNMENT) return function_pattern_value(c, r);
+		// alignment patterns
+		if (v > 1) {
+			// this calculates the correct values for the spec, though the spec itself is questionable
+			int n_patterns = v / 7 + 2;
+			int first_pos = ALIGNMENT;
+			int last_pos = n - 1 - ALIGNMENT;
+			int diff = last_pos - first_pos;
+			int offset = (diff + (n_patterns - 1) / 2) / (n_patterns - 1); // rounded divide
+			offset = (offset + 1) >> 1 << 1; // round up to even
+			int second_pos = last_pos - (n_patterns - 2) * offset;
+			auto f = [second_pos, offset](int x){
+				if(x <= ALIGNMENT + ALIGNMENT_RADIUS) return ALIGNMENT;
+				return second_pos + (x - second_pos + ALIGNMENT_RADIUS) / offset * offset;
+			};
+			int vr = f(r);
+			int vc = f(c);
+			if ((vr != ALIGNMENT && vc != ALIGNMENT) ||
+					min(vr, (int) n - vr - 1) != ALIGNMENT ||
+					min(vc, (int) n - vc - 1) != ALIGNMENT) {
+				int dist = max(abs((int) r - vr), abs((int) c - vc));
+				if (dist <= ALIGNMENT_RADIUS) {
+					return dist == 1 ? CellValue::WHITE : CellValue::BLACK;
+				}
+			}
+		}
+		// version bits
+		if (v >= 7) {
+			if (min(r, c) < ALIGNMENT && max(r, c) >= n - FINDER_WIDTH - 3) {
+				if (r > c) return function_pattern_value(c, r);
+				c -= n - FINDER_WIDTH - 3;
+				size_t i = r * 3 + c;
+				if (i >= 12) {
+					// bit directly from version number
+					return v & (1 << (i - 12)) ? CellValue::BLACK : CellValue::WHITE;
+				} else {
+					// bit from error correction
+					Poly p = Poly::FromBinary(v) << 12;
+					p %= VERSION_GENERATOR_POLYNOMIAL;
+					return p.coef(i) ? CellValue::BLACK : CellValue::WHITE;
+				}
+			}
+		}
+		// format and data bits
+		return CellValue::UNKNOWN;
 	}
 };
+// x^12 + x^11 + x^10 + x^9 + x^8 + x^5 + x^2 + 1
+const Poly QR::VERSION_GENERATOR_POLYNOMIAL = Poly::FromBinary(0b1111100100101);
+// x^10 + x^8 + x^5 + x^4 + x^2 + x + 1
+const Poly QR::FORMAT_GENERATOR_POLYNOMIAL = Poly::FromBinary(0b10100110111);
 
 vector<vector<CellValue>> read_grid(istream &is) {
 	unordered_map<char, CellValue> symbol_table;
 	for (char c : BLACK) symbol_table[c] = CellValue::BLACK;
 	for (char c : WHITE) symbol_table[c] = CellValue::WHITE;
-	for (char c : ERASURE) symbol_table[c] = CellValue::ERASURE;
+	for (char c : UNKNOWN) symbol_table[c] = CellValue::UNKNOWN;
 	vector<vector<CellValue>> grid;
 	string s;
 	while (getline(is, s)) {
@@ -515,7 +610,7 @@ int main(int argc, char *argv[]) {
 	helptext << "Attempt to decode a QR code from text input. Input should be lines of symbols, with ["
 		<< BLACK << "] for black, ["
 		<< WHITE << "] for white, and ["
-		<< ERASURE << "] for unknown.";
+		<< UNKNOWN << "] for unknown.";
 	cxxopts::Options argparse("qr", helptext.str());
 	argparse.add_options()
 		("h,help", "help")
