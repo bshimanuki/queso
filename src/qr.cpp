@@ -1,3 +1,4 @@
+#include <array>
 #include <cassert>
 #include <cctype>
 #include <climits>
@@ -12,6 +13,7 @@
 #include <tuple>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -717,7 +719,7 @@ public:
 
 	// returns (codewords, erasures), without accounting for interleaving
 	// any masking should be done before this is called
-	pair<vector<uint8_t>, vector<size_t>> get_codewords() const {
+	pair<vector<uint8_t>, vector<size_t>> get_raw_codewords() const {
 		vector<uint8_t> codewords;
 		vector<size_t> erasures;
 		uint8_t codeword = 0;
@@ -769,15 +771,109 @@ public:
 		return {codewords, erasures};
 	}
 
+	const Version::VersionLevel& get_version(uint8_t level) const {
+		const Version &versions = VERSIONS.at(v - 1);
+		switch (level) {
+		case 1:
+			return versions.levels[0];
+		case 0:
+			return versions.levels[1];
+		case 3:
+			return versions.levels[2];
+		case 2:
+			return versions.levels[3];
+		default:
+			throw domain_error("invalid QR level");
+		}
+	}
+
+	// returns {(codewords, erasures), ...} arranged by block
+	// any masking should be done before this is called
+	vector<pair<vector<uint8_t>, vector<size_t>>> get_codewords(const Version::VersionLevel &version) const {
+		auto [_raw_codewords, _raw_erasures] = get_raw_codewords();
+		auto &raw_codewords = _raw_codewords; // needed to bind in lambda
+		unordered_set<size_t> raw_erasures(_raw_erasures.begin(), _raw_erasures.end());
+		size_t num_blocks = 0;
+		for (const auto &group : version.groups) {
+			num_blocks += group.blocks;
+		}
+		vector<pair<vector<uint8_t>, vector<size_t>>> blockdata(num_blocks);
+		size_t done = 0;
+		size_t iteration = 0;
+		size_t codeword_i = 0;
+		auto next = [&codeword_i, &raw_codewords]() {
+			if (codeword_i == raw_codewords.size()) throw out_of_range(Formatter() << "out of range when attempting to read past " << raw_codewords.size() << " codewords");
+			return codeword_i++;
+		};
+		// data codewords
+		while (done < num_blocks) {
+			size_t block_i = 0;
+			for (const auto &group : version.groups) {
+				for (size_t block=0; block<group.blocks; ++block) {
+					if (iteration < group.datawords) {
+						size_t i = next();
+						auto& [codewords, erasures] = blockdata[block_i];
+						if (raw_erasures.count(i)) erasures.push_back(codewords.size());
+						codewords.push_back(raw_codewords[i]);
+					} else if (iteration == group.datawords) {
+						++done;
+					}
+					++block_i;
+				}
+			}
+			++iteration;
+		}
+		// error correction codewords
+		for (iteration=0; iteration<version.errorwords; ++iteration) {
+			size_t block_i = 0;
+			for (const auto &group : version.groups) {
+				for (size_t block=0; block<group.blocks; ++block) {
+					size_t i = next();
+					auto& [codewords, erasures] = blockdata[block_i];
+					if (raw_erasures.count(i)) erasures.push_back(codewords.size());
+					codewords.push_back(raw_codewords[i]);
+					++block_i;
+				}
+			}
+		}
+		return blockdata;
+	}
+
 	string solve() const {
 		uint8_t format = get_format();
 		uint8_t level = format >> 3;
 		uint8_t mask = format & 7;
+		const Version::VersionLevel &version = get_version(level);
 		QR qr(*this); // copy
 		qr.apply_mask(mask);
-		auto [codewords, erasures] = qr.get_codewords();
+		auto all_codewords = qr.get_codewords(version);
+		vector<uint8_t> datawords;
+		size_t group_i = 0;
+		size_t block_i = 0;
+		for (size_t i=0; i<all_codewords.size(); ++i) {
+			const auto& [codewords, _erasures] = all_codewords[i];
+			if (++block_i == version.groups[group_i].blocks) {
+				block_i = 0;
+				++group_i;
+			}
+			const auto &versionlevel = version.groups[group_i];
+			// first codewords are highest order terms
+			Poly p(codewords.rbegin(), codewords.rend());
+			vector<size_t> erasures(_erasures.size());
+			transform(_erasures.rbegin(), _erasures.rend(), erasures.begin(), [&p](size_t i) { return p.size() - i; });
+			p = p.error_correct(version.errorwords, erasures);
+			p >>= version.errorwords;
+			if (p.size() > versionlevel.datawords) throw runtime_error(Formatter() << "error correction yielded bytes at out of range locations");
+			p.resize(versionlevel.datawords);
+			transform(p.rbegin(), p.rend(), back_inserter(datawords), [](GF x) { return x(); });
+		}
+		return decode(datawords);
+	}
+
+	static string decode(const vector<uint8_t> &datawords) {
+		ostringstream os;
 		// TODO
-		return "";
+		return os.str();
 	}
 
 	bool is_format_bit(size_t r, size_t c) const {
