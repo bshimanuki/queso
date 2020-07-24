@@ -1,10 +1,9 @@
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cctype>
 #include <climits>
 #include <cstring>
-#include <algorithm>
-#include <array>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -19,8 +18,6 @@
 
 #include "cxxopts.hpp"
 
-using namespace std;
-
 constexpr char BLACK[] = "1#+*@Xx";
 constexpr char WHITE[] = " .0Oo_-";
 constexpr char UNKNOWN[] = "=?";
@@ -31,7 +28,7 @@ class Options {
 public:
 	bool all_format_options = false;
 	bool debug = false;
-	string path = "-";
+	std::string path = "-";
 
 	~Options() {};
 	Options(void*) {};
@@ -39,26 +36,28 @@ public:
 } options{nullptr};
 
 
-const string& to_string(const string &s) {return s;}
-template <typename T> auto make_value(T &value, bool set_default=!is_same<bool,T>::value) {
-	if (set_default) return cxxopts::value<T>(value)->default_value(to_string(value));
+namespace std {
+	const std::string& to_string(const std::string &s) {return s;}
+}
+template <typename T> auto make_value(T &value, bool set_default=!std::is_same<bool,T>::value) {
+	if (set_default) return cxxopts::value<T>(value)->default_value(std::to_string(value));
 	return cxxopts::value<T>(value);
 }
 
 
 class Formatter {
-	ostringstream ss;
+	std::ostringstream ss;
 public:
 	template<typename T>
 	Formatter& operator<<(const T& value) {
 		ss << value;
 		return *this;
 	}
-	operator string() const { return ss.str(); }
-	string str() const { return *this; }
+	operator std::string() const { return ss.str(); }
+	std::string str() const { return *this; }
 };
 template<typename A, typename B>
-ostream& operator<<(ostream& os, const pair<A, B> &p) {
+std::ostream& operator<<(std::ostream& os, const std::pair<A, B> &p) {
 	os << "(" << p.first << ", " << p.second << ")";
 	return os;
 }
@@ -66,36 +65,35 @@ ostream& operator<<(ostream& os, const pair<A, B> &p) {
 
 struct identity {
 	template<typename T>
-	constexpr	auto operator()(T&& v) const noexcept { return forward<T>(v); }
+	constexpr	auto operator()(T&& v) const noexcept { return std::forward<T>(v); }
 };
 
 
+template <uint16_t ORDER, uint16_t GENERATOR, uint16_t A=2>
 class GF {
 	uint8_t v;
+	static_assert(ORDER <= 256, "Order greater than 256 does not fit in uint8_t");
 public:
-	static constexpr uint16_t A = 2;
-	static constexpr uint16_t MOD = 285;
-	static constexpr uint16_t ORDER = 256; // order of GF256
-	static constexpr uint16_t SUBORDER = 255; // order of multiplicative subgroup
+	static constexpr uint16_t SUBORDER = ORDER - 1; // order of multiplicative subgroup
 private:
 	static constexpr auto _LOG_ANTILOG_PAIR = [] {
-		array<uint16_t, ORDER> log{}, antilog{};
+		std::array<uint16_t, ORDER> log{}, antilog{};
 		uint16_t x = 1;
 		for (int i=0; i<SUBORDER; ++i) {
 			log[x] = i;
 			antilog[i] = x;
 			x *= A;
-			if (x >= ORDER) x ^= MOD;
+			if (x >= ORDER) x ^= GENERATOR;
 		}
 		antilog[SUBORDER] = x;
-		assert(x == 1);
 		return make_pair(log, antilog);
 	}();
-	static constexpr array<uint16_t, ORDER> LOG = _LOG_ANTILOG_PAIR.first;
-	static constexpr array<uint16_t, ORDER> ANTILOG = _LOG_ANTILOG_PAIR.second;
+	static constexpr std::array<uint16_t, ORDER> LOG = _LOG_ANTILOG_PAIR.first;
+	static constexpr std::array<uint16_t, ORDER> ANTILOG = _LOG_ANTILOG_PAIR.second;
+	static_assert(ANTILOG[SUBORDER] == 1);
 public:
 	static uint8_t log(const GF &x) {
-		if (x == 0) throw domain_error("can't take log of 0");
+		if (x == 0) throw std::domain_error("can't take log of 0");
 		return LOG[x.v];
 	}
 	static GF antilog(int e) {
@@ -111,7 +109,7 @@ public:
 	GF pow(int e) const {
 		if (v == 0) {
 			if (e >= 0) return 0;
-			throw domain_error("inverse of 0");
+			throw std::domain_error("inverse of 0");
 		}
 		return antilog(log(v) * e);
 	}
@@ -124,150 +122,137 @@ public:
 	GF& operator/=(const GF &rhs) { return *this *= rhs.inv(); }
 	GF operator-() const { return this->inv(); }
 	GF inv() const {
-		if (v == 0) throw domain_error("inverse of 0");
+		if (v == 0) throw std::domain_error("inverse of 0");
 		return GF(antilog(SUBORDER - log(v)));
 	}
 
-	friend GF operator-(const GF &lhs, const GF &rhs);
-	friend GF operator+(const GF &lhs, const GF &rhs);
-	friend GF operator*(const GF &lhs, const GF &rhs);
-	friend GF operator/(const GF &lhs, const GF &rhs);
+	friend GF operator-(const GF &lhs, const GF &rhs) { return GF(lhs) -= rhs; }
+	friend GF operator+(const GF &lhs, const GF &rhs) { return GF(lhs) += rhs; }
+	friend GF operator*(const GF &lhs, const GF &rhs) { return GF(lhs) *= rhs; }
+	friend GF operator/(const GF &lhs, const GF &rhs) { return GF(lhs) /= rhs; }
 
 	explicit operator bool() const { return v; }
-	friend ostream &operator<<(ostream &os, const GF &x);
+	friend std::ostream &operator<<(std::ostream &os, const GF &x) { return os << x(); }
 };
-GF operator-(const GF &lhs, const GF &rhs) { return GF(lhs) -= rhs; }
-GF operator+(const GF &lhs, const GF &rhs) { return GF(lhs) += rhs; }
-GF operator*(const GF &lhs, const GF &rhs) { return GF(lhs) *= rhs; }
-GF operator/(const GF &lhs, const GF &rhs) { return GF(lhs) /= rhs; }
-ostream &operator<<(ostream &os, const GF &x) { return os << x.v; }
 
 
 template<typename T>
-class FixedLengthVector : protected vector<T> {
+class FixedLengthVector : protected std::vector<T> {
 protected:
 	template<typename ...Args>
-	explicit FixedLengthVector(Args &&...args) : vector<T>(forward<Args>(args)...) {}
+	explicit FixedLengthVector(Args &&...args) : std::vector<T>(std::forward<Args>(args)...) {}
 public:
-	auto begin() { return vector<T>::begin(); }
-	auto begin() const { return vector<T>::begin(); }
-	auto end() { return vector<T>::end(); }
-	auto end() const { return vector<T>::end(); }
-	auto rbegin() { return vector<T>::rbegin(); }
-	auto rbegin() const { return vector<T>::rbegin(); }
-	auto rend() { return vector<T>::rend(); }
-	auto rend() const { return vector<T>::rend(); }
-	auto cbegin() const { return vector<T>::cbegin(); }
-	auto cend() const { return vector<T>::cend(); }
-	auto crbegin() const { return vector<T>::crbegin(); }
-	auto crend() const { return vector<T>::crend(); }
-	auto size() const { return vector<T>::size(); }
-	auto empty() const { return vector<T>::empty(); }
-	auto& operator[](size_t n) { return vector<T>::operator[](n); }
-	auto& operator[](size_t n) const { return vector<T>::operator[](n); }
-	auto& at(size_t n) { return vector<T>::at(n); }
-	auto& at(size_t n) const { return vector<T>::at(n); }
-	auto& front() { return vector<T>::front(); }
-	auto& front() const { return vector<T>::front(); }
-	auto& back() { return vector<T>::back(); }
-	auto& back() const { return vector<T>::back(); }
-	auto& data() { return vector<T>::data(); }
-	auto& data() const { return vector<T>::data(); }
+	auto begin() { return std::vector<T>::begin(); }
+	auto begin() const { return std::vector<T>::begin(); }
+	auto end() { return std::vector<T>::end(); }
+	auto end() const { return std::vector<T>::end(); }
+	auto rbegin() { return std::vector<T>::rbegin(); }
+	auto rbegin() const { return std::vector<T>::rbegin(); }
+	auto rend() { return std::vector<T>::rend(); }
+	auto rend() const { return std::vector<T>::rend(); }
+	auto cbegin() const { return std::vector<T>::cbegin(); }
+	auto cend() const { return std::vector<T>::cend(); }
+	auto crbegin() const { return std::vector<T>::crbegin(); }
+	auto crend() const { return std::vector<T>::crend(); }
+	auto size() const { return std::vector<T>::size(); }
+	auto empty() const { return std::vector<T>::empty(); }
+	auto& operator[](size_t n) { return std::vector<T>::operator[](n); }
+	auto& operator[](size_t n) const { return std::vector<T>::operator[](n); }
+	auto& at(size_t n) { return std::vector<T>::at(n); }
+	auto& at(size_t n) const { return std::vector<T>::at(n); }
+	auto& front() { return std::vector<T>::front(); }
+	auto& front() const { return std::vector<T>::front(); }
+	auto& back() { return std::vector<T>::back(); }
+	auto& back() const { return std::vector<T>::back(); }
+	auto& data() { return std::vector<T>::data(); }
+	auto& data() const { return std::vector<T>::data(); }
 
 	auto& operator()(size_t n) { return at(n); }
 	auto& operator()(size_t n) const { return at(n); }
 };
 
 
+template<typename T> class Matrix; // forward declaration
 // Vector class that cannot be resized after construction
-class Vector : public FixedLengthVector<GF> {
-	friend class Matrix;
+template <typename T>
+class Vector : public FixedLengthVector<T> {
+	friend class Matrix<T>;
 
 	void check_same_shape(const Vector &oth) const {
-		if (size() != oth.size()) throw domain_error(Formatter() << "vector sizes " << size() << " and " << oth.size() << " don't match");
+		if (this->size() != oth.size()) throw std::domain_error(Formatter() << "vector sizes " << this->size() << " and " << oth.size() << " don't match");
 	}
 
 public:
 	template<typename ...Args>
-	explicit Vector(Args &&...args) : FixedLengthVector<GF>(forward<Args>(args)...) {}
+	explicit Vector(Args &&...args) : FixedLengthVector<T>(std::forward<Args>(args)...) {}
 
-	const vector<GF>& vector() const { return *this; }
+	const std::vector<T>& vector() const { return *this; }
 	Vector& operator-=(const Vector &rhs) {
 		check_same_shape(rhs);
-		transform(begin(), end(), rhs.begin(), begin(), minus<GF>());
+		std::transform(this->begin(), this->end(), rhs.begin(), this->begin(), std::minus<T>());
 		return *this;
 	}
 	Vector& operator+=(const Vector &rhs) { return *this -= rhs; }
-	Vector& operator-=(const GF &rhs) { for (GF &x : *this) x -= rhs; return *this; }
-	Vector& operator+=(const GF &rhs) { for (GF &x : *this) x += rhs; return *this; }
-	Vector& operator*=(const GF &rhs) { for (GF &x : *this) x *= rhs; return *this; }
-	Vector& operator/=(const GF &rhs) { for (GF &x : *this) x /= rhs; return *this; }
+	Vector& operator-=(const T &rhs) { for (T &x : *this) x -= rhs; return *this; }
+	Vector& operator+=(const T &rhs) { for (T &x : *this) x += rhs; return *this; }
+	Vector& operator*=(const T &rhs) { for (T &x : *this) x *= rhs; return *this; }
+	Vector& operator/=(const T &rhs) { for (T &x : *this) x /= rhs; return *this; }
 
-	friend Vector operator-(const Vector &lhs, const Vector &rhs);
-	friend Vector operator+(const Vector &lhs, const Vector &rhs);
-	friend GF operator*(const Vector &lhs, const Vector &rhs);
+	friend Vector operator-(const Vector &lhs, const Vector &rhs) { return Vector(lhs) -= rhs; }
+	friend Vector operator+(const Vector &lhs, const Vector &rhs) { return Vector(lhs) += rhs; }
+	friend T operator*(const Vector &lhs, const Vector &rhs) {
+		lhs.check_same_shape(rhs);
+		T s = 0;
+		for (size_t i=0; i<lhs.size(); ++i) {
+			s -= lhs(i) * rhs(i);
+		}
+		return s;
+	}
 
-	friend Vector operator-(const GF &lhs, const Vector &rhs);
-	friend Vector operator-(const Vector &lhs, const GF &rhs);
-	friend Vector operator+(const GF &lhs, const Vector &rhs);
-	friend Vector operator+(const Vector &lhs, const GF &rhs);
-	friend Vector operator*(const GF &lhs, const Vector &rhs);
-	friend Vector operator*(const Vector &lhs, const GF &rhs);
-	friend Vector operator/(const GF &lhs, const Vector &rhs);
-	friend Vector operator/(const Vector &lhs, const GF &rhs);
+	friend Vector operator-(const T &lhs, const Vector &rhs) { return Vector(rhs) -= lhs; }
+	friend Vector operator-(const Vector &lhs, const T &rhs) { return Vector(lhs) -= rhs; }
+	friend Vector operator+(const T &lhs, const Vector &rhs) { return Vector(rhs) += lhs; }
+	friend Vector operator+(const Vector &lhs, const T &rhs) { return Vector(lhs) += rhs; }
+	friend Vector operator*(const T &lhs, const Vector &rhs) { return Vector(rhs) *= lhs; }
+	friend Vector operator*(const Vector &lhs, const T &rhs) { return Vector(lhs) *= rhs; }
+	friend Vector operator/(const T &lhs, const Vector &rhs) { return Vector(rhs) /= lhs; }
+	friend Vector operator/(const Vector &lhs, const T &rhs) { return Vector(lhs) /= rhs; }
 
-	friend ostream &operator<<(ostream &os, const Vector &v);
+	friend std::ostream &operator<<(std::ostream &os, const Vector &v) {
+		os << "[";
+		for (auto it = v.begin(); it != v.end(); ++it) {
+			if (it != v.begin()) os << " ";
+			os << std::setw(3) << *it;
+		}
+		os << "]";
+		return os;
+	}
 };
-Vector operator-(const Vector &lhs, const Vector &rhs) { return Vector(lhs) -= rhs; }
-Vector operator+(const Vector &lhs, const Vector &rhs) { return Vector(lhs) += rhs; }
-GF operator*(const Vector &lhs, const Vector &rhs) {
-	lhs.check_same_shape(rhs);
-	GF s = 0;
-	for (size_t i=0; i<lhs.size(); ++i) {
-		s -= lhs[i] * rhs[i];
-	}
-	return s;
-}
-Vector operator-(const GF &lhs, const Vector &rhs) { return Vector(rhs) -= lhs; }
-Vector operator-(const Vector &lhs, const GF &rhs) { return Vector(lhs) -= rhs; }
-Vector operator+(const GF &lhs, const Vector &rhs) { return Vector(rhs) += lhs; }
-Vector operator+(const Vector &lhs, const GF &rhs) { return Vector(lhs) += rhs; }
-Vector operator*(const GF &lhs, const Vector &rhs) { return Vector(rhs) *= lhs; }
-Vector operator*(const Vector &lhs, const GF &rhs) { return Vector(lhs) *= rhs; }
-Vector operator/(const GF &lhs, const Vector &rhs) { return Vector(rhs) /= lhs; }
-Vector operator/(const Vector &lhs, const GF &rhs) { return Vector(lhs) /= rhs; }
-ostream &operator<<(ostream &os, const Vector &v) {
-	os << "[";
-	for (auto it = v.begin(); it != v.end(); ++it) {
-		if (it != v.begin()) os << " ";
-		os << setw(3) << *it;
-	}
-	os << "]";
-	return os;
-}
 
 
-class Matrix : public FixedLengthVector<Vector> {
+template <typename T>
+class Matrix : public FixedLengthVector<Vector<T>> {
 	void check_same_shape(const Matrix &oth) const {
-		if (shape() != oth.shape()) throw domain_error(Formatter() << "matrix shapes " << shape() << " and " << oth.shape() << " do not match");
+		if (shape() != oth.shape()) throw std::domain_error(Formatter() << "matrix shapes " << shape() << " and " << oth.shape() << " do not match");
 	}
 public:
+	using Vec = Vector<T>;
 	const size_t m, n;
 
-	Matrix(size_t m, size_t n) : FixedLengthVector<Vector>(m, Vector(n)), m{m}, n{n} {}
+	Matrix(size_t m, size_t n) : FixedLengthVector<Vec>(m, Vec(n)), m{m}, n{n} {}
 
-	pair<size_t, size_t> shape() const { return {m, n}; }
+	std::pair<size_t, size_t> shape() const { return {m, n}; }
 	size_t size() const { return m * n; }
 
-	Vector& operator()(size_t i) { return this->FixedLengthVector<Vector>::operator()(i); }
-	const Vector& operator()(size_t i) const { return this->FixedLengthVector<Vector>::operator()(i); }
-	GF& operator()(size_t i, size_t j) { return (*this)(i)(j); }
-	const GF& operator()(size_t i, size_t j) const { return (*this)(i)(j); }
-	Vector& row(size_t i) { return this->at(i); }
-	const Vector& row(size_t i) const { return this->at(i); }
-	Vector col(size_t j) const {
-		Vector cv(m);
-		transform(begin(), end(), cv.begin(), [&](const auto &rv){ return rv.at(j); });
+	Vec& operator()(size_t i) { return this->FixedLengthVector<Vec>::operator()(i); }
+	const Vec& operator()(size_t i) const { return this->FixedLengthVector<Vec>::operator()(i); }
+	T& operator()(size_t i, size_t j) { return (*this)(i)(j); }
+	const T& operator()(size_t i, size_t j) const { return (*this)(i)(j); }
+	Vec& row(size_t i) { return this->at(i); }
+	const Vec& row(size_t i) const { return this->at(i); }
+	Vec col(size_t j) const {
+		Vec cv(m);
+		std::transform(this->begin(), this->end(), cv.begin(), [&](const auto &rv){ return rv.at(j); });
 		return cv;
 	}
 
@@ -293,8 +278,8 @@ public:
 	}
 
 	// returns (solvable, solution)
-	pair<bool, Vector> solve(const Vector &b) const {
-		if (b.size() != m) throw domain_error(Formatter() << "vector of size " << b.size() << " does not match column vectors of matrix with shape " << shape());
+	std::pair<bool, Vec> solve(const Vec &b) const {
+		if (b.size() != m) throw std::domain_error(Formatter() << "vector of size " << b.size() << " does not match column vectors of matrix with shape " << shape());
 		Matrix aug(m, n+1);
 		for (size_t i=0; i<m; ++i) {
 			for (size_t j=0; j<n; ++j) {
@@ -303,7 +288,7 @@ public:
 			aug(i, n) = b(i);
 		}
 		size_t rank = aug.rref();
-		Vector solution(n);
+		Vec solution(n);
 		bool solvable = !(aug(rank - 1).back() && none_of(aug(rank - 1).begin(), aug(rank - 1).end()-1, identity()));
 		if (solvable) {
 			size_t j = 0;
@@ -319,89 +304,77 @@ public:
 
 	Matrix& operator-=(const Matrix &rhs) {
 		check_same_shape(rhs);
-		transform(begin(), end(), rhs.begin(), begin(), minus<Vector>());
+		std::transform(this->begin(), this->end(), rhs.begin(), this->begin(), std::minus<Vec>());
 		return *this;
 	}
 	Matrix& operator+=(const Matrix &rhs) { return *this -= rhs; }
-	// Matrix and Vector addition / subtraction are row-wise
-	Matrix& operator-=(const Vector &rhs) { for (auto &v : *this) v -= rhs; return *this; }
-	Matrix& operator+=(const Vector &rhs) { for (auto &v : *this) v += rhs; return *this; }
-	Matrix& operator-=(const GF &rhs) { for (auto &v : *this) v -= rhs; return *this; }
-	Matrix& operator+=(const GF &rhs) { for (auto &v : *this) v += rhs; return *this; }
-	Matrix& operator*=(const GF &rhs) { for (auto &v : *this) v *= rhs; return *this; }
-	Matrix& operator/=(const GF &rhs) { for (auto &v : *this) v /= rhs; return *this; }
+	// Matrix and Vec addition / subtraction are row-wise
+	Matrix& operator-=(const Vec &rhs) { for (auto &v : *this) v -= rhs; return *this; }
+	Matrix& operator+=(const Vec &rhs) { for (auto &v : *this) v += rhs; return *this; }
+	Matrix& operator-=(const T &rhs) { for (auto &v : *this) v -= rhs; return *this; }
+	Matrix& operator+=(const T &rhs) { for (auto &v : *this) v += rhs; return *this; }
+	Matrix& operator*=(const T &rhs) { for (auto &v : *this) v *= rhs; return *this; }
+	Matrix& operator/=(const T &rhs) { for (auto &v : *this) v /= rhs; return *this; }
 
-	friend Matrix operator*(const Matrix &lhs, const Matrix &rhs);
-	friend Vector operator*(const Matrix &lhs, const Vector &rhs);
-	friend Vector operator*(const Vector &lhs, const Matrix &rhs);
-
-	friend Matrix operator-(const Vector &lhs, const Matrix &rhs);
-	friend Matrix operator-(const Matrix &lhs, const Vector &rhs);
-	friend Matrix operator+(const Vector &lhs, const Matrix &rhs);
-	friend Matrix operator+(const Matrix &lhs, const Vector &rhs);
-	friend Matrix operator-(const GF &lhs, const Matrix &rhs);
-	friend Matrix operator-(const Matrix &lhs, const GF &rhs);
-	friend Matrix operator+(const GF &lhs, const Matrix &rhs);
-	friend Matrix operator+(const Matrix &lhs, const GF &rhs);
-	friend Matrix operator*(const GF &lhs, const Matrix &rhs);
-	friend Matrix operator*(const Matrix &lhs, const GF &rhs);
-	friend Matrix operator/(const GF &lhs, const Matrix &rhs);
-	friend Matrix operator/(const Matrix &lhs, const GF &rhs);
-
-	friend ostream &operator<<(ostream &os, const Matrix &m);
-};
-Vector operator*(const Matrix &lhs, const Vector &rhs) {
-	Vector cv(lhs.m);
-	transform(lhs.begin(), lhs.end(), cv.begin(), [&](const auto &rv){ return rv * rhs; });
-	return cv;
-}
-Vector operator*(const Vector &lhs, const Matrix &rhs) {
-	Vector rv(rhs.n);
-	for (size_t j=0; j<rv.size(); ++j) {
-		rv[j] = lhs * rhs.col(j);
+	friend Vec operator*(const Matrix &lhs, const Vec &rhs) {
+		Vec cv(lhs.m);
+		std::transform(lhs.begin(), lhs.end(), cv.begin(), [&](const auto &rv){ return rv * rhs; });
+		return cv;
 	}
-	return rv;
-}
-Matrix operator*(const Matrix &lhs, const Matrix &rhs) {
-	if (lhs.n != rhs.m) throw domain_error(Formatter() << "matrix shapes " << lhs.shape() << " and " << rhs.shape() << " cannot be multiplied");
-	Matrix result(lhs.m, rhs.n);
-	for (size_t i=0; i<result.m; ++i) {
-		for (size_t j=0; j<result.n; ++j) {
-			result(i, j) = lhs.row(i) * rhs.col(j);
+	friend Vec operator*(const Vec &lhs, const Matrix &rhs) {
+		Vec rv(rhs.n);
+		for (size_t j=0; j<rv.size(); ++j) {
+			rv[j] = lhs * rhs.col(j);
 		}
+		return rv;
 	}
-	return result;
-}
-Matrix operator-(const Vector &lhs, const Matrix &rhs) { return Matrix(rhs) -= lhs; }
-Matrix operator-(const Matrix &lhs, const Vector &rhs) { return Matrix(lhs) -= rhs; }
-Matrix operator+(const Vector &lhs, const Matrix &rhs) { return Matrix(rhs) += lhs; }
-Matrix operator+(const Matrix &lhs, const Vector &rhs) { return Matrix(lhs) += rhs; }
-Matrix operator-(const GF &lhs, const Matrix &rhs) { return Matrix(rhs) -= lhs; }
-Matrix operator-(const Matrix &lhs, const GF &rhs) { return Matrix(lhs) -= rhs; }
-Matrix operator+(const GF &lhs, const Matrix &rhs) { return Matrix(rhs) += lhs; }
-Matrix operator+(const Matrix &lhs, const GF &rhs) { return Matrix(lhs) += rhs; }
-Matrix operator*(const GF &lhs, const Matrix &rhs) { return Matrix(rhs) *= lhs; }
-Matrix operator*(const Matrix &lhs, const GF &rhs) { return Matrix(lhs) *= rhs; }
-Matrix operator/(const GF &lhs, const Matrix &rhs) { return Matrix(rhs) /= lhs; }
-Matrix operator/(const Matrix &lhs, const GF &rhs) { return Matrix(lhs) /= rhs; }
-ostream &operator<<(ostream &os, const Matrix &m) {
-	os << "[";
-	for (auto it = m.begin(); it != m.end(); ++it) {
-		if (it != m.begin()) os << "\n ";
-		os << *it;
+	friend Matrix operator*(const Matrix &lhs, const Matrix &rhs) {
+		if (lhs.n != rhs.m) throw std::domain_error(Formatter() << "matrix shapes " << lhs.shape() << " and " << rhs.shape() << " cannot be multiplied");
+		Matrix result(lhs.m, rhs.n);
+		for (size_t i=0; i<result.m; ++i) {
+			for (size_t j=0; j<result.n; ++j) {
+				result(i, j) = lhs.row(i) * rhs.col(j);
+			}
+		}
+		return result;
 	}
-	os << "]";
-	return os;
-}
+
+	friend Matrix operator-(const Vec &lhs, const Matrix &rhs) { return Matrix(rhs) -= lhs; }
+	friend Matrix operator-(const Matrix &lhs, const Vec &rhs) { return Matrix(lhs) -= rhs; }
+	friend Matrix operator+(const Vec &lhs, const Matrix &rhs) { return Matrix(rhs) += lhs; }
+	friend Matrix operator+(const Matrix &lhs, const Vec &rhs) { return Matrix(lhs) += rhs; }
+	friend Matrix operator-(const T &lhs, const Matrix &rhs) { return Matrix(rhs) -= lhs; }
+	friend Matrix operator-(const Matrix &lhs, const T &rhs) { return Matrix(lhs) -= rhs; }
+	friend Matrix operator+(const T &lhs, const Matrix &rhs) { return Matrix(rhs) += lhs; }
+	friend Matrix operator+(const Matrix &lhs, const T &rhs) { return Matrix(lhs) += rhs; }
+	friend Matrix operator*(const T &lhs, const Matrix &rhs) { return Matrix(rhs) *= lhs; }
+	friend Matrix operator*(const Matrix &lhs, const T &rhs) { return Matrix(lhs) *= rhs; }
+	friend Matrix operator/(const T &lhs, const Matrix &rhs) { return Matrix(rhs) /= lhs; }
+	friend Matrix operator/(const Matrix &lhs, const T &rhs) { return Matrix(lhs) /= rhs; }
+
+	friend std::ostream &operator<<(std::ostream &os, const Matrix &m) {
+		os << "[";
+		for (auto it = m.begin(); it != m.end(); ++it) {
+			if (it != m.begin()) os << "\n ";
+			os << *it;
+		}
+		os << "]";
+		return os;
+	}
+};
 
 
 // Polynomial = c0 + c1 * x + ... + c{n-1} * x^{n-1}, where Poly[i] = c{i}
-class Poly : public vector<GF> {
+template<typename T>
+class Poly : public std::vector<T> {
 public:
-	template<typename ...Args>
-	explicit Poly(Args &&...args) : vector<GF>(forward<Args>(args)...) {}
-	Poly(const GF &x) : vector<GF>{x} {}
-	static Poly Mono(size_t n, const GF &c=1) { Poly p = Poly(n); p.push_back(c); return p; }
+	Poly(const T &x) : std::vector<T>{x} {}
+	explicit Poly() : std::vector<T>() {}
+	template<typename First, std::enable_if_t<!std::is_same_v<std::remove_reference_t<std::remove_const_t<First>>, T>, int> = 0>
+	explicit Poly(First first) : std::vector<T>(std::forward<First>(first)) {}
+	template<typename First, typename Second, typename ...Args>
+	explicit Poly(First first, Second second, Args &&...args) : std::vector<T>(std::forward<First>(first), std::forward<Second>(second), std::forward<Args>(args)...) {}
+	static Poly Mono(size_t n, const T &c=1) { Poly p = Poly(n); p.push_back(c); return p; }
 	static Poly FromBinary(uint64_t bin) {
 		Poly p;
 		for (size_t i=0; i<64; ++i) {
@@ -414,42 +387,42 @@ public:
 	}
 
 	int deg() const {
-		auto it = rbegin();
-		while (it != rend() && !*it) ++it;
-		return rend() - it - (int) 1;
+		auto it = this->rbegin();
+		while (it != this->rend() && !*it) ++it;
+		return this->rend() - it - (int) 1;
 	}
-	void set(size_t n, const GF &c=1) {
-		if (n >= size()) resize(n);
+	void set(size_t n, const T &c=1) {
+		if (n >= this->size()) this->resize(n);
 		(*this)[n] = c;
 	}
 
 	// remove leading 0 coefficients
 	void reduce() {
-		auto it = rbegin();
-		while (it != rend() && !*it) ++it;
-		erase(it.base(), end());
+		auto it = this->rbegin();
+		while (it != this->rend() && !*it) ++it;
+		this->erase(it.base(), this->end());
 	}
-	GF operator()(const GF &x) const {
-		GF y = 0;
-		for (size_t i=0; i<size(); ++i) y += (*this)[i] * x.pow(i);
+	T operator()(const T &x) const {
+		T y = 0;
+		for (size_t i=0; i<this->size(); ++i) y += (*this)[i] * x.pow(i);
 		return y;
 	}
 	// get coefficient, even if higher than the order of the polynomial
-	GF coef(size_t n) const { return n < size() ? (*this)[n] : 0; }
+	T coef(size_t n) const { return n < this->size() ? (*this)[n] : 0; }
 
 	uint64_t to_binary() const {
-		if (deg() > 63) throw overflow_error(Formatter() << "polynomial with degree " << deg() << " does not fit in a 64 bit integer");
+		if (deg() > 63) throw std::overflow_error(Formatter() << "polynomial with degree " << deg() << " does not fit in a 64 bit integer");
 		uint64_t bin = 0;
-		for(size_t i=0; i<=size(); ++i) {
+		for(size_t i=0; i<=this->size(); ++i) {
 			if ((*this)[i] == 1) bin |= 1LL << i;
-			else if ((*this)[i]) throw domain_error(Formatter() << "polynomial cannot be converted to binary because the coefficient for x^" << i << " is " << (*this)[i]);
+			else if ((*this)[i]) throw std::domain_error(Formatter() << "polynomial cannot be converted to binary because the coefficient for x^" << i << " is " << (*this)[i]);
 		}
 		return bin;
 	}
 
 	Poly& operator-=(const Poly &rhs) {
-		if (size() < rhs.size()) resize(rhs.size());
-		transform(begin(), end(), rhs.begin(), begin(), minus<GF>());
+		if (this->size() < rhs.size()) this->resize(rhs.size());
+		std::transform(this->begin(), this->end(), rhs.begin(), this->begin(), std::minus<T>());
 		return *this;
 	}
 	Poly& operator+=(const Poly &rhs) { return *this -= rhs; }
@@ -467,9 +440,9 @@ private:
 	static void div(Poly *r, const Poly &b, Poly *q=nullptr) {
 		if (q) q->clear();
 		r->reduce();
-		if (b.deg() < 0) throw domain_error("divide by empty polynomial");
+		if (b.deg() < 0) throw std::domain_error("divide by empty polynomial");
 		while (r->deg() >= b.deg()) {
-			GF coef = r->back() / b.back();
+			T coef = r->back() / b.back();
 			size_t deg = r->deg() - b.deg();
 			Poly multiple = (coef * b) << deg;
 			if (q) *q += Mono(deg, coef);
@@ -481,23 +454,23 @@ public:
 	Poly& operator*=(const Poly &rhs) { return *this = mul(*this, rhs); }
 	Poly& operator/=(const Poly &rhs) { Poly q; div(this, rhs, &q); return *this = q; }
 	Poly& operator%=(const Poly &rhs) { div(this, rhs); return *this; }
-	Poly& operator<<=(size_t n) { insert(begin(), n, 0); return *this; }
-	Poly& operator>>=(size_t n) { erase(begin(), min(begin()+n, end())); return *this; }
-	Poly operator<<(size_t n) { Poly p(n); p.insert(p.end(), begin(), end()); return p; }
-	Poly operator>>(size_t n) { return Poly(min(begin()+n, end()), end()); }
+	Poly& operator<<=(size_t n) { this->insert(this->begin(), n, 0); return *this; }
+	Poly& operator>>=(size_t n) { this->erase(this->begin(), std::min(this->begin()+n, this->end())); return *this; }
+	Poly operator<<(size_t n) { Poly p(n); p.insert(p.end(), this->begin(), this->end()); return p; }
+	Poly operator>>(size_t n) { return Poly(std::min(this->begin()+n, this->end()), this->end()); }
 
-	friend Poly operator-(const Poly &lhs, const Poly &rhs);
-	friend Poly operator+(const Poly &lhs, const Poly &rhs);
-	friend Poly operator*(const Poly &lhs, const Poly &rhs);
-	friend Poly operator/(const Poly &lhs, const Poly &rhs);
-	friend Poly operator%(const Poly &lhs, const Poly &rhs);
+	friend Poly operator-(const Poly &lhs, const Poly &rhs) { return Poly(lhs) -= rhs; }
+	friend Poly operator+(const Poly &lhs, const Poly &rhs) { return Poly(lhs) += rhs; }
+	friend Poly operator*(const Poly &lhs, const Poly &rhs) { return Poly::mul(lhs, rhs); }
+	friend Poly operator/(const Poly &lhs, const Poly &rhs) { return Poly(lhs) /= rhs; }
+	friend Poly operator%(const Poly &lhs, const Poly &rhs) { return Poly(lhs) %= rhs; }
 
 	static Poly generator(size_t n) {
-		if (n > GF::SUBORDER) throw overflow_error(Formatter() << "cannot create generator for size " << n);
-		Poly gen = GF(1);
+		if (n > T::SUBORDER) throw std::overflow_error(Formatter() << "cannot create generator for size " << n);
+		Poly gen = T(1);
 		for (size_t i=0; i<n; ++i) {
 			// A^i + 1
-			gen *= Poly(initializer_list<GF>{GF::antilog(i), 1});
+			gen *= Poly(std::initializer_list<T>{T::antilog(i), 1});
 		}
 		return gen;
 	}
@@ -505,14 +478,14 @@ public:
 	// perform error correction
 	// err_codewords: number of error correcting code words
 	// erasures: positions of known erasures
-	Poly error_correct(size_t err_codewords, const vector<size_t> &erasures={}) const {
+	Poly error_correct(size_t err_codewords, const std::vector<size_t> &erasures={}) const {
 		Poly gen = generator(err_codewords);
-		Vector syndromes(err_codewords);
-		for (size_t i=0; i<err_codewords; ++i) syndromes[i] = (*this)(GF::antilog(i));
+		Vector<T> syndromes(err_codewords);
+		for (size_t i=0; i<err_codewords; ++i) syndromes[i] = (*this)(T::antilog(i));
 		// TODO: erasures
 		size_t nu = err_codewords / 2; // number of corrections
-		Matrix mat_locator(nu, nu);
-		Vector b_locator(mat_locator.m);
+		Matrix<T> mat_locator(nu, nu);
+		Vector<T> b_locator(mat_locator.m);
 		for (size_t i=0; i<mat_locator.m; ++i) {
 			for (size_t j=0; j<mat_locator.n; ++j) {
 				mat_locator(i, j) = syndromes(i + j);
@@ -520,25 +493,25 @@ public:
 			b_locator(i) = syndromes(nu + i);
 		}
 		auto [locator_solvable, locator_coefs] = mat_locator.solve(b_locator);
-		if (!locator_solvable) throw runtime_error("could not solve for locator polynomial");
+		if (!locator_solvable) throw std::runtime_error("could not solve for locator polynomial");
 		Poly locator{1}; // initialize with constant term
 		// locator polynomial is in reverse order
 		locator.insert(locator.end(), locator_coefs.rbegin(), locator_coefs.rend());
-		vector<size_t> locations;
-		for (size_t i=0; i<GF::SUBORDER; ++i) {
-			if (locator(GF::antilog(i).inv()) == 0) locations.push_back(i);
+		std::vector<size_t> locations;
+		for (size_t i=0; i<T::SUBORDER; ++i) {
+			if (locator(T::antilog(i).inv()) == 0) locations.push_back(i);
 		}
 		nu = locations.size();
-		Matrix mat_err(err_codewords, nu);
-		Vector b_err(mat_err.m);
+		Matrix<T> mat_err(err_codewords, nu);
+		Vector<T> b_err(mat_err.m);
 		for (size_t i=0; i<mat_err.m; ++i) {
 			for (size_t j=0; j<mat_err.n; ++j) {
-				mat_err(i, j) = GF::antilog(locations[j]).pow(1 + i);
+				mat_err(i, j) = T::antilog(locations[j]).pow(1 + i);
 			}
 			b_err(i) = syndromes(i);
 		}
 		auto [err_solvable, err_coefs] = mat_err.solve(b_err);
-		if (!err_solvable) throw runtime_error("could not solve for error values");
+		if (!err_solvable) throw std::runtime_error("could not solve for error values");
 		Poly err;
 		for (size_t i=0; i<nu; ++i) {
 			err.set(locations[i], err_coefs[i]);
@@ -546,23 +519,17 @@ public:
 		return (*this) - err;
 	}
 
-	explicit operator bool() const { return any_of(begin(), end(), identity()); }
-	friend ostream &operator<<(ostream &os, const Poly &p);
-};
-Poly operator-(const Poly &lhs, const Poly &rhs) { return Poly(lhs) -= rhs; }
-Poly operator+(const Poly &lhs, const Poly &rhs) { return Poly(lhs) += rhs; }
-Poly operator*(const Poly &lhs, const Poly &rhs) { return Poly::mul(lhs, rhs); }
-Poly operator/(const Poly &lhs, const Poly &rhs) { return Poly(lhs) /= rhs; }
-Poly operator%(const Poly &lhs, const Poly &rhs) { return Poly(lhs) %= rhs; }
-ostream &operator<<(ostream &os, const Poly &p) {
-	os << "Poly[";
-	for (auto it = p.begin(); it != p.end(); ++it) {
-		if (it != p.begin()) os << ",";
-		os << *it;
+	explicit operator bool() const { return any_of(this->begin(), this->end(), identity()); }
+	friend std::ostream &operator<<(std::ostream &os, const Poly &p) {
+		os << "Poly[";
+		for (auto it = p.begin(); it != p.end(); ++it) {
+			if (it != p.begin()) os << ",";
+			os << *it;
+		}
+		os << "]";
+		return os;
 	}
-	os << "]";
-	return os;
-}
+};
 
 
 struct Version {
@@ -573,8 +540,8 @@ struct Version {
 		};
 		char level = 0;
 		size_t errorwords; // per block
-		vector<Group> groups;
-		VersionLevel(size_t errorwords, const vector<Group> &groups) :
+		std::vector<Group> groups;
+		VersionLevel(size_t errorwords, const std::vector<Group> &groups) :
 			errorwords{errorwords},
 			groups{groups} {}
 		VersionLevel(char level, const VersionLevel &v) : VersionLevel(v) {
@@ -582,9 +549,9 @@ struct Version {
 		}
 	};
 	int version;
-	vector<size_t> alignments;
-	array<VersionLevel, 4> levels;
-	Version(int version, const vector<size_t> &alignments,
+	std::vector<size_t> alignments;
+	std::array<VersionLevel, 4> levels;
+	Version(int version, const std::vector<size_t> &alignments,
 			const VersionLevel &l, const VersionLevel &m, const VersionLevel &q, const VersionLevel &h) :
 		version{version},
 		alignments{alignments},
@@ -612,26 +579,29 @@ CellValue operator-(const CellValue &v) {
 	}
 }
 
+using GF256 = GF<256, 0b100011101>;
+using GF16 = GF<16, 0b10011>;
+using GF2 = GF<2, 0b10, 1>;
 class QR {
-	vector<vector<CellValue>> grid;
+	std::vector<std::vector<CellValue>> grid;
 	size_t n;
 	int v;
 
 	void validate() const {
 		for (size_t i=0; i<grid.size(); ++i) {
 			if (grid[i].size() != grid.size()) {
-				throw runtime_error(Formatter() << "QR code has " << grid.size() << " rows but row " << (i+1) << " has " << grid[i].size() << " columns");
+				throw std::runtime_error(Formatter() << "QR code has " << grid.size() << " rows but row " << (i+1) << " has " << grid[i].size() << " columns");
 			}
 		}
-		if (grid.size() != n) throw runtime_error(Formatter() << "QR code of size " << grid.size() << " does not match specified size of " << n);
-		if (v != (int) n / 4 - 4) throw runtime_error(Formatter() << "QR code version number " << v << " does not match grid size " << n);
+		if (grid.size() != n) throw std::runtime_error(Formatter() << "QR code of size " << grid.size() << " does not match specified size of " << n);
+		if (v != (int) n / 4 - 4) throw std::runtime_error(Formatter() << "QR code version number " << v << " does not match grid size " << n);
 		if (n % 4 != 1 || v < 1 || v > 40) {
-			throw runtime_error(Formatter() << "QR code is " << n << "x" << n << " but " << n << " is not a valid size");
+			throw std::runtime_error(Formatter() << "QR code is " << n << "x" << n << " but " << n << " is not a valid size");
 		}
 	}
 
-	static const Poly VERSION_GENERATOR_POLYNOMIAL;
-	static const Poly FORMAT_GENERATOR_POLYNOMIAL;
+	static const Poly<GF2> VERSION_GENERATOR_POLYNOMIAL;
+	static const Poly<GF16> FORMAT_GENERATOR_POLYNOMIAL;
 	static constexpr int FORMAT_BITS = 15;
 	static constexpr uint16_t FORMAT_MASK = 0b101010000010010;
 	// bytes
@@ -645,17 +615,17 @@ class QR {
 	static constexpr int FORMAT_OFFSET = 8;
 	static constexpr int FORMAT_SPLIT = 7;
 public:
-	static const vector<Version> VERSIONS;
+	static const std::vector<Version> VERSIONS;
 
 	~QR() {};
-	QR(const vector<vector<CellValue>> &grid) : grid(grid) {
+	QR(const std::vector<std::vector<CellValue>> &grid) : grid(grid) {
 		n = grid.size();
 		v = n / 4 - 4;
 		validate();
 	}
-	QR(size_t n) : QR(vector<vector<CellValue>>(n, vector<CellValue>(n, CellValue::UNKNOWN))) {}
+	QR(size_t n) : QR(std::vector<std::vector<CellValue>>(n, std::vector<CellValue>(n, CellValue::UNKNOWN))) {}
 
-	array<float, FORMAT_BITS> format_bit_proportions() const {
+	std::array<float, FORMAT_BITS> format_bit_proportions() const {
 		auto f = [](CellValue v) -> double {
 			switch(v) {
 			case CellValue::BLACK:
@@ -667,7 +637,7 @@ public:
 				return 0.5;
 			}
 		};
-		array<float, FORMAT_BITS> bits = {};
+		std::array<float, FORMAT_BITS> bits = {};
 		for (size_t c=0; c<FORMAT_SPLIT; ++c) bits[c] += f(grid[FORMAT_OFFSET][c + (c >= ALIGNMENT)]) / 2;
 		for (size_t c=FORMAT_SPLIT; c<FORMAT_BITS; ++c) bits[c] += f(grid[FORMAT_OFFSET][n - (FORMAT_BITS - c)]) / 2;
 		for (size_t r=0; r<FORMAT_SPLIT; ++r) bits[r] += f(grid[n - 1 - r][FORMAT_OFFSET]) / 2;
@@ -681,10 +651,10 @@ public:
 		for (size_t i=0; i<bits.size(); ++i) {
 			if (bits[i] > 0.5) guess |= 1 << i;
 		}
-		Poly p = Poly::FromBinary(guess);
+		Poly p = Poly<GF16>::FromBinary(guess);
 		p = p.error_correct(10);
 		uint64_t format = p.to_binary();
-		if (format ^ (format & 0x7fff)) throw runtime_error(Formatter() << "computed invalid format string " << hex << format);
+		if (format ^ (format & 0x7fff)) throw std::runtime_error(Formatter() << "computed invalid format std::string " << std::hex << format);
 		format ^= FORMAT_MASK;
 		return format >> 10;
 	}
@@ -723,15 +693,15 @@ public:
 
 	// returns (codewords, erasures), without accounting for interleaving
 	// any masking should be done before this is called
-	pair<vector<uint8_t>, vector<size_t>> get_raw_codewords() const {
-		vector<uint8_t> codewords;
-		vector<size_t> erasures;
+	std::pair<std::vector<uint8_t>, std::vector<size_t>> get_raw_codewords() const {
+		std::vector<uint8_t> codewords;
+		std::vector<size_t> erasures;
 		uint8_t codeword = 0;
 		size_t bit = 0;
 		bool erasure = false;
 		size_t r = n - 1;
 		size_t c = n - 1;
-		bool right = true; // state for whether on right side of column pair
+		bool right = true; // state for whether on right side of column std::pair
 		bool up = true; // state for whether on traversing upwards
 		while (c >= 0) {
 			if (c == ALIGNMENT) {
@@ -787,26 +757,26 @@ public:
 		case 2:
 			return versions.levels[3];
 		default:
-			throw domain_error("invalid QR level");
+			throw std::domain_error("invalid QR level");
 		}
 	}
 
 	// returns {(codewords, erasures), ...} arranged by block
 	// any masking should be done before this is called
-	vector<pair<vector<uint8_t>, vector<size_t>>> get_codewords(const Version::VersionLevel &version) const {
+	std::vector<std::pair<std::vector<uint8_t>, std::vector<size_t>>> get_codewords(const Version::VersionLevel &version) const {
 		auto [_raw_codewords, _raw_erasures] = get_raw_codewords();
 		auto &raw_codewords = _raw_codewords; // needed to bind in lambda
-		unordered_set<size_t> raw_erasures(_raw_erasures.begin(), _raw_erasures.end());
+		std::unordered_set<size_t> raw_erasures(_raw_erasures.begin(), _raw_erasures.end());
 		size_t num_blocks = 0;
 		for (const auto &group : version.groups) {
 			num_blocks += group.blocks;
 		}
-		vector<pair<vector<uint8_t>, vector<size_t>>> blockdata(num_blocks);
+		std::vector<std::pair<std::vector<uint8_t>, std::vector<size_t>>> blockdata(num_blocks);
 		size_t done = 0;
 		size_t iteration = 0;
 		size_t codeword_i = 0;
 		auto next = [&codeword_i, &raw_codewords]() {
-			if (codeword_i == raw_codewords.size()) throw out_of_range(Formatter() << "out of range when attempting to read past " << raw_codewords.size() << " codewords");
+			if (codeword_i == raw_codewords.size()) throw std::out_of_range(Formatter() << "out of range when attempting to read past " << raw_codewords.size() << " codewords");
 			return codeword_i++;
 		};
 		// data codewords
@@ -843,7 +813,7 @@ public:
 		return blockdata;
 	}
 
-	string solve() const {
+	std::string solve() const {
 		uint8_t format = get_format();
 		uint8_t level = format >> 3;
 		uint8_t mask = format & 7;
@@ -851,7 +821,7 @@ public:
 		QR qr(*this); // copy
 		qr.apply_mask(mask);
 		auto all_codewords = qr.get_codewords(version);
-		vector<uint8_t> datawords;
+		std::vector<uint8_t> datawords;
 		size_t group_i = 0;
 		size_t block_i = 0;
 		for (size_t i=0; i<all_codewords.size(); ++i) {
@@ -862,20 +832,20 @@ public:
 			}
 			const auto &versionlevel = version.groups[group_i];
 			// first codewords are highest order terms
-			Poly p(codewords.rbegin(), codewords.rend());
-			vector<size_t> erasures(_erasures.size());
-			transform(_erasures.rbegin(), _erasures.rend(), erasures.begin(), [&p](size_t i) { return p.size() - i; });
+			Poly<GF256> p(codewords.rbegin(), codewords.rend());
+			std::vector<size_t> erasures(_erasures.size());
+			std::transform(_erasures.rbegin(), _erasures.rend(), erasures.begin(), [&p](size_t i) { return p.size() - i; });
 			p = p.error_correct(version.errorwords, erasures);
 			p >>= version.errorwords;
-			if (p.size() > versionlevel.datawords) throw runtime_error(Formatter() << "error correction yielded bytes at out of range locations");
+			if (p.size() > versionlevel.datawords) throw std::runtime_error(Formatter() << "error correction yielded bytes at out of range locations");
 			p.resize(versionlevel.datawords);
-			transform(p.rbegin(), p.rend(), back_inserter(datawords), [](GF x) { return x(); });
+			std::transform(p.rbegin(), p.rend(), std::back_inserter(datawords), [](GF256 x){return x();} );
 		}
 		return decode(datawords, v);
 	}
 
-	static string decode(const vector<uint8_t> &datawords, size_t version) {
-		ostringstream os;
+	static std::string decode(const std::vector<uint8_t> &datawords, size_t version) {
+		std::ostringstream os;
 		uint64_t buffer = 0;
 		size_t bit_length = 0;
 		size_t index = 0;
@@ -897,14 +867,14 @@ public:
 			if (length) {
 				switch (mode) {
 				case 0b0001: { // numeric
-						size_t digits = min((size_t) 3, length);
+						size_t digits = std::min((size_t) 3, length);
 						uint64_t v = read(3 * digits + 1);
 						length -= digits;
-						os << setfill('0') << setw(digits) << v;
+						os << std::setfill('0') << std::setw(digits) << v;
 					}
 					break;
 				case 0b0010: { // alphanumeric
-						size_t chars = min((size_t) 2, length);
+						size_t chars = std::min((size_t) 2, length);
 						uint64_t v = read(5 * chars + 1);
 						length -= chars;
 						for (size_t i=0; i<chars; ++i) {
@@ -931,7 +901,7 @@ public:
 					}
 					break;
 				default:
-					throw runtime_error(Formatter() << "unsupported mode " << mode);
+					throw std::runtime_error(Formatter() << "unsupported mode " << mode);
 					break;
 				}
 			} else {
@@ -944,24 +914,24 @@ public:
 					}
 					break;
 				case 0b0001: { // numeric
-						length = read(array{10, 12, 14}.at(versionset));
+						length = read(std::array{10, 12, 14}.at(versionset));
 					}
 					break;
 				case 0b0010: { // alphanumeric
-						length = read(array{9, 11, 13}.at(versionset));
+						length = read(std::array{9, 11, 13}.at(versionset));
 					}
 					break;
 				case 0b0100: { // byte
-						length = read(array{8, 16, 16}.at(versionset));
+						length = read(std::array{8, 16, 16}.at(versionset));
 					}
 					break;
 				case 0b1000: { // kanji
-						length = read(array{8, 10, 12}.at(versionset));
+						length = read(std::array{8, 10, 12}.at(versionset));
 					}
 					break;
 				case 0b0111: // ECI
 				default:
-					throw runtime_error(Formatter() << "unsupported mode " << mode);
+					throw std::runtime_error(Formatter() << "unsupported mode " << mode);
 					break;
 				}
 			}
@@ -982,7 +952,7 @@ public:
 		return false;
 	}
 
-	pair<bool, CellValue> is_data_bit(size_t r, size_t c) const {
+	std::pair<bool, CellValue> is_data_bit(size_t r, size_t c) const {
 		CellValue value = function_pattern_value(r, c);
 		bool b = value == CellValue::UNKNOWN && !is_format_bit(r, c);
 		return {b, value};
@@ -993,7 +963,8 @@ public:
 		if (r == n - FINDER_WIDTH) return CellValue::BLACK;
 		// top left finder pattern
 		if (r < FINDER_WIDTH && c < FINDER_WIDTH) {
-			switch (max(abs((int)r-3), abs((int)c-3))) {
+			switch (std::
+					max(abs((int)r-3), abs((int)c-3))) {
 			case 2:
 			case 4:
 				return CellValue::WHITE;
@@ -1002,8 +973,9 @@ public:
 			}
 		}
 		// top right / bottom left finder patterns
-		if (min(r, c) < FINDER_WIDTH && max(r, c) >= n - FINDER_WIDTH) {
-			return function_pattern_value(min(r, n - 1 - r), min(c, n - 1 - c));
+		if (std::min(r, c) < FINDER_WIDTH && std::
+				max(r, c) >= n - FINDER_WIDTH) {
+			return function_pattern_value(std::min(r, n - 1 - r), std::min(c, n - 1 - c));
 		}
 		// timing patterns
 		if (r == ALIGNMENT) return c % 2 ? CellValue::BLACK : CellValue::WHITE;
@@ -1025,9 +997,10 @@ public:
 			int vr = f(r);
 			int vc = f(c);
 			if ((vr != ALIGNMENT && vc != ALIGNMENT) ||
-					min(vr, (int) n - vr - 1) != ALIGNMENT ||
-					min(vc, (int) n - vc - 1) != ALIGNMENT) {
-				int dist = max(abs((int) r - vr), abs((int) c - vc));
+					std::min(vr, (int) n - vr - 1) != ALIGNMENT ||
+					std::min(vc, (int) n - vc - 1) != ALIGNMENT) {
+				int dist = std::
+					max(abs((int) r - vr), abs((int) c - vc));
 				if (dist <= ALIGNMENT_RADIUS) {
 					return dist == 1 ? CellValue::WHITE : CellValue::BLACK;
 				}
@@ -1035,7 +1008,8 @@ public:
 		}
 		// version bits
 		if (v >= 7) {
-			if (min(r, c) < ALIGNMENT && max(r, c) >= n - FINDER_WIDTH - 3) {
+			if (std::min(r, c) < ALIGNMENT && std::
+					max(r, c) >= n - FINDER_WIDTH - 3) {
 				if (r > c) return function_pattern_value(c, r);
 				c -= n - FINDER_WIDTH - 3;
 				size_t i = r * 3 + c;
@@ -1044,7 +1018,7 @@ public:
 					return v & (1 << (i - 12)) ? CellValue::BLACK : CellValue::WHITE;
 				} else {
 					// bit from error correction
-					Poly p = Poly::FromBinary(v) << 12;
+					Poly p = Poly<GF2>::FromBinary(v) << 12;
 					p %= VERSION_GENERATOR_POLYNOMIAL;
 					return p.coef(i) ? CellValue::BLACK : CellValue::WHITE;
 				}
@@ -1055,18 +1029,18 @@ public:
 	}
 };
 // x^12 + x^11 + x^10 + x^9 + x^8 + x^5 + x^2 + 1
-const Poly QR::VERSION_GENERATOR_POLYNOMIAL = Poly::FromBinary(0b1111100100101);
+const Poly<GF2> QR::VERSION_GENERATOR_POLYNOMIAL = Poly<GF2>::FromBinary(0b1111100100101);
 // x^10 + x^8 + x^5 + x^4 + x^2 + x + 1
-const Poly QR::FORMAT_GENERATOR_POLYNOMIAL = Poly::FromBinary(0b10100110111);
+const Poly<GF16> QR::FORMAT_GENERATOR_POLYNOMIAL = Poly<GF16>::FromBinary(0b10100110111);
 
 
-vector<vector<CellValue>> read_grid(istream &is) {
-	unordered_map<char, CellValue> symbol_table;
+std::vector<std::vector<CellValue>> read_grid(std::istream &is) {
+	std::unordered_map<char, CellValue> symbol_table;
 	for (char c : BLACK) symbol_table[c] = CellValue::BLACK;
 	for (char c : WHITE) symbol_table[c] = CellValue::WHITE;
 	for (char c : UNKNOWN) symbol_table[c] = CellValue::UNKNOWN;
-	vector<vector<CellValue>> grid;
-	string s;
+	std::vector<std::vector<CellValue>> grid;
+	std::string s;
 	while (getline(is, s)) {
 		if (!s.empty()) {
 			grid.emplace_back();
@@ -1081,7 +1055,7 @@ vector<vector<CellValue>> read_grid(istream &is) {
 
 
 int main(int argc, char *argv[]) {
-	ostringstream helptext;
+	std::ostringstream helptext;
 	helptext << "Attempt to decode a QR code from text input. Input should be lines of symbols, with ["
 		<< BLACK << "] for black, ["
 		<< WHITE << "] for white, and ["
@@ -1095,28 +1069,28 @@ int main(int argc, char *argv[]) {
 		;
 	argparse.parse_positional({"path"});
 	argparse.allow_unrecognised_options();
-	string positional_help = "[PATH]";
+	std::string positional_help = "[PATH]";
 	argparse.positional_help(positional_help);
 
 	auto args = argparse.parse(argc, argv);
 
 	if (args.count("help")) {
-		cerr << argparse.help({""});
+		std::cerr << argparse.help({""});
 		return 0;
 	}
 
-	vector<vector<CellValue>> grid;
-	if (options.path == "-") grid = read_grid(cin);
+	std::vector<std::vector<CellValue>> grid;
+	if (options.path == "-") grid = read_grid(std::cin);
 	else {
-		ifstream fin(options.path);
+		std::ifstream fin(options.path);
 		grid = read_grid(fin);
 	}
 
 	QR qr(grid);
-	cout << qr.solve() << endl;;
+	std::cout << qr.solve() << std::endl;;
 }
 
-const vector<Version> QR::VERSIONS = {
+const std::vector<Version> QR::VERSIONS = {
 	Version(1, {},
 			{7, {{1, 19}}},
 			{10, {{1, 16}}},
