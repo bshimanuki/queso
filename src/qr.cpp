@@ -193,10 +193,10 @@ public:
 		return *this;
 	}
 	Vector& operator+=(const Vector &rhs) { return *this -= rhs; }
-	Vector& operator-=(const T &rhs) { for (T &x : *this) x -= rhs; return *this; }
-	Vector& operator+=(const T &rhs) { for (T &x : *this) x += rhs; return *this; }
-	Vector& operator*=(const T &rhs) { for (T &x : *this) x *= rhs; return *this; }
-	Vector& operator/=(const T &rhs) { for (T &x : *this) x /= rhs; return *this; }
+	Vector& operator-=(const T rhs) { for (T &x : *this) x -= rhs; return *this; }
+	Vector& operator+=(const T rhs) { for (T &x : *this) x += rhs; return *this; }
+	Vector& operator*=(const T rhs) { for (T &x : *this) x *= rhs; return *this; }
+	Vector& operator/=(const T rhs) { for (T &x : *this) x /= rhs; return *this; }
 
 	friend Vector operator-(const Vector &lhs, const Vector &rhs) { return Vector(lhs) -= rhs; }
 	friend Vector operator+(const Vector &lhs, const Vector &rhs) { return Vector(lhs) += rhs; }
@@ -219,12 +219,12 @@ public:
 	friend Vector operator/(const Vector &lhs, const T &rhs) { return Vector(lhs) /= rhs; }
 
 	friend std::ostream &operator<<(std::ostream &os, const Vector &v) {
-		os << "[";
+		os << "[ ";
 		for (auto it = v.begin(); it != v.end(); ++it) {
 			if (it != v.begin()) os << " ";
 			os << std::setw(3) << *it;
 		}
-		os << "]";
+		os << " ]";
 		return os;
 	}
 };
@@ -309,12 +309,12 @@ public:
 	}
 	Matrix& operator+=(const Matrix &rhs) { return *this -= rhs; }
 	// Matrix and Vec addition / subtraction are row-wise
-	Matrix& operator-=(const Vec &rhs) { for (auto &v : *this) v -= rhs; return *this; }
-	Matrix& operator+=(const Vec &rhs) { for (auto &v : *this) v += rhs; return *this; }
-	Matrix& operator-=(const T &rhs) { for (auto &v : *this) v -= rhs; return *this; }
-	Matrix& operator+=(const T &rhs) { for (auto &v : *this) v += rhs; return *this; }
-	Matrix& operator*=(const T &rhs) { for (auto &v : *this) v *= rhs; return *this; }
-	Matrix& operator/=(const T &rhs) { for (auto &v : *this) v /= rhs; return *this; }
+	Matrix& operator-=(const Vec rhs) { for (auto &v : *this) v -= rhs; return *this; }
+	Matrix& operator+=(const Vec rhs) { for (auto &v : *this) v += rhs; return *this; }
+	Matrix& operator-=(const T rhs) { for (auto &v : *this) v -= rhs; return *this; }
+	Matrix& operator+=(const T rhs) { for (auto &v : *this) v += rhs; return *this; }
+	Matrix& operator*=(const T rhs) { for (auto &v : *this) v *= rhs; return *this; }
+	Matrix& operator/=(const T rhs) { for (auto &v : *this) v /= rhs; return *this; }
 
 	friend Vec operator*(const Matrix &lhs, const Vec &rhs) {
 		Vec cv(lhs.m);
@@ -482,7 +482,12 @@ public:
 	Poly error_correct(size_t num_syndromes, const std::vector<size_t> &erasures={}) const {
 		Poly gen = generator(num_syndromes);
 		Vector<T> syndromes(num_syndromes);
-		for (size_t i=0; i<num_syndromes; ++i) syndromes[i] = (*this)(T::antilog(i + 1));
+		bool has_errors = false;
+		for (size_t i=0; i<num_syndromes; ++i) {
+			syndromes[i] = (*this)(T::antilog(i + 1));
+			has_errors |= (bool) syndromes[i];
+		}
+		if (!has_errors) return *this; // short-circuit
 		// TODO: erasures
 		size_t nu = num_syndromes / 2; // number of corrections
 		Matrix<T> mat_locator(nu, nu);
@@ -495,7 +500,7 @@ public:
 		}
 		auto [locator_solvable, locator_coefs] = mat_locator.solve(b_locator);
 		if (!locator_solvable) throw std::runtime_error("could not solve for locator polynomial");
-		Poly locator{1}; // initialize with constant term
+		Poly locator = T(1); // initialize with constant term
 		// locator polynomial is in reverse order
 		locator.insert(locator.end(), locator_coefs.rbegin(), locator_coefs.rend());
 		std::vector<size_t> locations;
@@ -503,6 +508,7 @@ public:
 			if (locator(T::antilog(i).inv()) == 0) locations.push_back(i);
 		}
 		nu = locations.size();
+		if (nu == 0) throw std::runtime_error("locator polynomial does not have roots");
 		Matrix<T> mat_err(num_syndromes, nu);
 		Vector<T> b_err(mat_err.m);
 		for (size_t i=0; i<mat_err.m; ++i) {
@@ -711,8 +717,9 @@ public:
 				--c;
 				continue;
 			}
-			auto [is_data, value] = is_data_bit(r, c);
+			bool is_data = is_data_bit(r, c).first;
 			if (is_data) {
+				const CellValue &value = grid[r][c];
 				uint8_t v = 0;
 				switch (value) {
 				case CellValue::BLACK:
