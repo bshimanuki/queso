@@ -380,7 +380,7 @@ public:
 		Poly p;
 		for (size_t i=0; i<64; ++i) {
 			if (bin & (1LL << i)) {
-				p.resize(i + 1);
+				p.resize(i + 1, 0);
 				p.back() = 1;
 			}
 		}
@@ -393,7 +393,7 @@ public:
 		return this->rend() - it - (int) 1;
 	}
 	void set(size_t n, const T &c=1) {
-		if (n >= this->size()) this->resize(n + 1);
+		if (n >= this->size()) this->resize(n + 1, 0);
 		(*this)[n] = c;
 	}
 
@@ -414,7 +414,7 @@ public:
 	uint64_t to_binary() const {
 		if (deg() > 63) throw std::overflow_error(Formatter() << "polynomial with degree " << deg() << " does not fit in a 64 bit integer");
 		uint64_t bin = 0;
-		for(size_t i=0; i<=this->size(); ++i) {
+		for(size_t i=0; i<this->size(); ++i) {
 			if ((*this)[i] == 1) bin |= 1LL << i;
 			else if ((*this)[i]) throw std::domain_error(Formatter() << "polynomial cannot be converted to binary because the coefficient for x^" << i << " is " << (*this)[i]);
 		}
@@ -422,8 +422,8 @@ public:
 	}
 
 	Poly& operator-=(const Poly &rhs) {
-		if (this->size() < rhs.size()) this->resize(rhs.size());
-		std::transform(this->begin(), this->end(), rhs.begin(), this->begin(), std::minus<T>());
+		if (this->size() < rhs.size()) this->resize(rhs.size(), 0);
+		std::transform(this->begin(), this->begin() + std::min(this->size(), rhs.size()), rhs.begin(), this->begin(), std::minus<T>());
 		return *this;
 	}
 	Poly& operator+=(const Poly &rhs) { return *this -= rhs; }
@@ -847,7 +847,7 @@ public:
 			p = p.error_correct(version.errorwords, erasures);
 			p >>= version.errorwords;
 			if (p.size() > versionlevel.datawords) throw std::runtime_error(Formatter() << "error correction yielded bytes at out of range locations");
-			p.resize(versionlevel.datawords);
+			p.resize(versionlevel.datawords, 0);
 			std::transform(p.rbegin(), p.rend(), std::back_inserter(datawords), [](GF256 x){return x();} );
 		}
 		return decode(datawords, v);
