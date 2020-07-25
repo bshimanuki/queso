@@ -132,7 +132,7 @@ public:
 	friend GF operator/(const GF &lhs, const GF &rhs) { return GF(lhs) /= rhs; }
 
 	explicit operator bool() const { return v; }
-	friend std::ostream &operator<<(std::ostream &os, const GF &x) { return os << x(); }
+	friend std::ostream &operator<<(std::ostream &os, const GF &x) { return os << (int) x(); }
 };
 
 
@@ -289,7 +289,7 @@ public:
 		}
 		size_t rank = aug.rref();
 		Vec solution(n);
-		bool solvable = !(aug(rank - 1).back() && none_of(aug(rank - 1).begin(), aug(rank - 1).end()-1, identity()));
+		bool solvable = rank == 0 || !(aug(rank - 1).back() && none_of(aug(rank - 1).begin(), aug(rank - 1).end()-1, identity()));
 		if (solvable) {
 			size_t j = 0;
 			for (size_t i=0; i<m; ++i) {
@@ -353,12 +353,12 @@ public:
 	friend Matrix operator/(const Matrix &lhs, const T &rhs) { return Matrix(lhs) /= rhs; }
 
 	friend std::ostream &operator<<(std::ostream &os, const Matrix &m) {
-		os << "[";
+		os << "[ ";
 		for (auto it = m.begin(); it != m.end(); ++it) {
 			if (it != m.begin()) os << "\n ";
 			os << *it;
 		}
-		os << "]";
+		os << " ]";
 		return os;
 	}
 };
@@ -369,6 +369,7 @@ template<typename T>
 class Poly : public std::vector<T> {
 public:
 	Poly(const T &x) : std::vector<T>{x} {}
+	// ugly template patterns to default to above constructor
 	explicit Poly() : std::vector<T>() {}
 	template<typename First, std::enable_if_t<!std::is_same_v<std::remove_reference_t<std::remove_const_t<First>>, T>, int> = 0>
 	explicit Poly(First first) : std::vector<T>(std::forward<First>(first)) {}
@@ -392,7 +393,7 @@ public:
 		return this->rend() - it - (int) 1;
 	}
 	void set(size_t n, const T &c=1) {
-		if (n >= this->size()) this->resize(n);
+		if (n >= this->size()) this->resize(n + 1);
 		(*this)[n] = c;
 	}
 
@@ -476,14 +477,14 @@ public:
 	}
 
 	// perform error correction
-	// err_codewords: number of error correcting code words
+	// num_syndromes: the hamming distance (equal to the number of error correcting words in a perfect code)
 	// erasures: positions of known erasures
-	Poly error_correct(size_t err_codewords, const std::vector<size_t> &erasures={}) const {
-		Poly gen = generator(err_codewords);
-		Vector<T> syndromes(err_codewords);
-		for (size_t i=0; i<err_codewords; ++i) syndromes[i] = (*this)(T::antilog(i));
+	Poly error_correct(size_t num_syndromes, const std::vector<size_t> &erasures={}) const {
+		Poly gen = generator(num_syndromes);
+		Vector<T> syndromes(num_syndromes);
+		for (size_t i=0; i<num_syndromes; ++i) syndromes[i] = (*this)(T::antilog(i + 1));
 		// TODO: erasures
-		size_t nu = err_codewords / 2; // number of corrections
+		size_t nu = num_syndromes / 2; // number of corrections
 		Matrix<T> mat_locator(nu, nu);
 		Vector<T> b_locator(mat_locator.m);
 		for (size_t i=0; i<mat_locator.m; ++i) {
@@ -502,7 +503,7 @@ public:
 			if (locator(T::antilog(i).inv()) == 0) locations.push_back(i);
 		}
 		nu = locations.size();
-		Matrix<T> mat_err(err_codewords, nu);
+		Matrix<T> mat_err(num_syndromes, nu);
 		Vector<T> b_err(mat_err.m);
 		for (size_t i=0; i<mat_err.m; ++i) {
 			for (size_t j=0; j<mat_err.n; ++j) {
@@ -642,6 +643,7 @@ public:
 		for (size_t c=FORMAT_SPLIT; c<FORMAT_BITS; ++c) bits[c] += f(grid[FORMAT_OFFSET][n - (FORMAT_BITS - c)]) / 2;
 		for (size_t r=0; r<FORMAT_SPLIT; ++r) bits[r] += f(grid[n - 1 - r][FORMAT_OFFSET]) / 2;
 		for (size_t r=FORMAT_SPLIT; r<FORMAT_BITS; ++r) bits[r] += f(grid[FORMAT_BITS - 1 - r + (FORMAT_BITS - 1 - r >= ALIGNMENT)][FORMAT_OFFSET]) / 2;
+		std::reverse(bits.begin(), bits.end()); // QR code order is high to low
 		return bits;
 	}
 
@@ -651,11 +653,11 @@ public:
 		for (size_t i=0; i<bits.size(); ++i) {
 			if (bits[i] > 0.5) guess |= 1 << i;
 		}
+		guess ^= FORMAT_MASK;
 		Poly p = Poly<GF16>::FromBinary(guess);
-		p = p.error_correct(10);
+		p = p.error_correct(6);
 		uint64_t format = p.to_binary();
 		if (format ^ (format & 0x7fff)) throw std::runtime_error(Formatter() << "computed invalid format std::string " << std::hex << format);
-		format ^= FORMAT_MASK;
 		return format >> 10;
 	}
 
@@ -699,8 +701,8 @@ public:
 		uint8_t codeword = 0;
 		size_t bit = 0;
 		bool erasure = false;
-		size_t r = n - 1;
-		size_t c = n - 1;
+		int r = n - 1;
+		int c = n - 1;
 		bool right = true; // state for whether on right side of column std::pair
 		bool up = true; // state for whether on traversing upwards
 		while (c >= 0) {
@@ -733,7 +735,7 @@ public:
 			}
 			c += right ? -1 : 1;
 			if (!right) {
-				if (up ? r == 0 : r == n - 1) {
+				if (up ? r == 0 : r == (int) n - 1) {
 					up = !up;
 					c -= 2;
 				} else {
@@ -947,20 +949,21 @@ public:
 		}
 		if (c == FORMAT_OFFSET) {
 			if (r >= n - 1 - FORMAT_SPLIT) return true;
-			if (r < FORMAT_BITS - FORMAT_SPLIT) return true;
+			if (r < FORMAT_BITS - FORMAT_SPLIT + 1) return true;
 		}
 		return false;
 	}
 
-	std::pair<bool, CellValue> is_data_bit(size_t r, size_t c) const {
+	std::pair<bool, CellValue> is_data_bit(int r, int c) const {
 		CellValue value = function_pattern_value(r, c);
 		bool b = value == CellValue::UNKNOWN && !is_format_bit(r, c);
 		return {b, value};
 	}
 
-	CellValue function_pattern_value(size_t r, size_t c) const {
+	CellValue function_pattern_value(int r, int c) const {
+		if (r < 0 || c < 0 || r >= (int) n || c >= (int) n) throw std::out_of_range(Formatter() << "(" << r << ", " << c << ") is not in the " << n << "x" << n << " grid");
 		// dark module
-		if (r == n - FINDER_WIDTH) return CellValue::BLACK;
+		if (r == (int) n - FINDER_WIDTH && c == FINDER_WIDTH + 1) return CellValue::BLACK;
 		// top left finder pattern
 		if (r < FINDER_WIDTH && c < FINDER_WIDTH) {
 			switch (std::
@@ -973,9 +976,8 @@ public:
 			}
 		}
 		// top right / bottom left finder patterns
-		if (std::min(r, c) < FINDER_WIDTH && std::
-				max(r, c) >= n - FINDER_WIDTH) {
-			return function_pattern_value(std::min(r, n - 1 - r), std::min(c, n - 1 - c));
+		if (std::min(r, c) < FINDER_WIDTH && std::max<int>(r, c) >= (int) n - FINDER_WIDTH) {
+			return function_pattern_value(std::min<int>(r, n - 1 - r), std::min<int>(c, n - 1 - c));
 		}
 		// timing patterns
 		if (r == ALIGNMENT) return c % 2 ? CellValue::BLACK : CellValue::WHITE;
@@ -999,8 +1001,7 @@ public:
 			if ((vr != ALIGNMENT && vc != ALIGNMENT) ||
 					std::min(vr, (int) n - vr - 1) != ALIGNMENT ||
 					std::min(vc, (int) n - vc - 1) != ALIGNMENT) {
-				int dist = std::
-					max(abs((int) r - vr), abs((int) c - vc));
+				int dist = std::max(abs((int) r - vr), abs((int) c - vc));
 				if (dist <= ALIGNMENT_RADIUS) {
 					return dist == 1 ? CellValue::WHITE : CellValue::BLACK;
 				}
@@ -1008,8 +1009,7 @@ public:
 		}
 		// version bits
 		if (v >= 7) {
-			if (std::min(r, c) < ALIGNMENT && std::
-					max(r, c) >= n - FINDER_WIDTH - 3) {
+			if (std::min<int>(r, c) < ALIGNMENT && std::max<int>(r, c) >= (int) n - FINDER_WIDTH - 3) {
 				if (r > c) return function_pattern_value(c, r);
 				c -= n - FINDER_WIDTH - 3;
 				size_t i = r * 3 + c;
