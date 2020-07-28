@@ -705,7 +705,7 @@ public:
 		std::vector<uint8_t> codewords;
 		std::vector<size_t> erasures;
 		uint8_t codeword = 0;
-		size_t bit = 0;
+		size_t bit = 8;
 		bool erasure = false;
 		int r = n - 1;
 		int c = n - 1;
@@ -731,13 +731,13 @@ public:
 					erasure = true;
 					break;
 				}
-				codeword |= v << bit++;
-				if (bit == 8) {
+				codeword |= v << --bit;
+				if (bit == 0) {
 					if (erasure) erasures.push_back(codewords.size());
 					erasure = false;
 					codewords.push_back(codeword);
 					codeword = 0;
-					bit = 0;
+					bit = 8;
 				}
 			}
 			c += right ? -1 : 1;
@@ -970,7 +970,7 @@ public:
 	CellValue function_pattern_value(int r, int c) const {
 		if (r < 0 || c < 0 || r >= (int) n || c >= (int) n) throw std::out_of_range(Formatter() << "(" << r << ", " << c << ") is not in the " << n << "x" << n << " grid");
 		// dark module
-		if (r == (int) n - FINDER_WIDTH && c == FINDER_WIDTH + 1) return CellValue::BLACK;
+		if (r == (int) n - FINDER_WIDTH && c == FINDER_WIDTH) return CellValue::BLACK;
 		// top left finder pattern
 		if (r < FINDER_WIDTH && c < FINDER_WIDTH) {
 			switch (std::
