@@ -372,9 +372,9 @@ public:
 	// ugly template patterns to default to above constructor
 	explicit Poly() : std::vector<T>() {}
 	template<typename First, std::enable_if_t<!std::is_same_v<std::remove_reference_t<std::remove_const_t<First>>, T>, int> = 0>
-	explicit Poly(First first) : std::vector<T>(std::forward<First>(first)) {}
+	explicit Poly(First &&first) : std::vector<T>(std::forward<First>(first)) {}
 	template<typename First, typename Second, typename ...Args>
-	explicit Poly(First first, Second second, Args &&...args) : std::vector<T>(std::forward<First>(first), std::forward<Second>(second), std::forward<Args>(args)...) {}
+	explicit Poly(First &&first, Second &&second, Args &&...args) : std::vector<T>(std::forward<First>(first), std::forward<Second>(second), std::forward<Args>(args)...) {}
 	static Poly Mono(size_t n, const T &c=1) { Poly p = Poly(n); p.push_back(c); return p; }
 	static Poly FromBinary(uint64_t bin) {
 		Poly p;
@@ -484,7 +484,7 @@ public:
 		Vector<T> syndromes(num_syndromes);
 		bool has_errors = false;
 		for (size_t i=0; i<num_syndromes; ++i) {
-			syndromes[i] = (*this)(T::antilog(i + 1));
+			syndromes[i] = (*this)(T::antilog(i));
 			has_errors |= (bool) syndromes[i];
 		}
 		if (!has_errors) return *this; // short-circuit
@@ -832,10 +832,9 @@ public:
 		auto all_codewords = qr.get_codewords(version);
 		std::vector<uint8_t> datawords;
 		size_t group_i = 0;
-		size_t block_i = 0;
-		for (size_t i=0; i<all_codewords.size(); ++i) {
+		for (size_t i=0, block_i=0; i<all_codewords.size(); ++i, ++block_i) {
 			const auto& [codewords, _erasures] = all_codewords[i];
-			if (++block_i == version.groups[group_i].blocks) {
+			if (block_i == version.groups[group_i].blocks) {
 				block_i = 0;
 				++group_i;
 			}
@@ -859,7 +858,7 @@ public:
 		size_t bit_length = 0;
 		size_t index = 0;
 		auto read = [&](size_t n) {
-			while (n < bit_length) {
+			while (bit_length < n) {
 				buffer <<= 8;
 				buffer |= datawords.at(index++);
 				bit_length += 8;
@@ -888,7 +887,7 @@ public:
 						length -= chars;
 						for (size_t i=0; i<chars; ++i) {
 							uint64_t vv = v;
-							for (size_t ii=0; ii<chars; ++ii) vv /= ALPHANUMERIC_SIZE;
+							for (size_t ii=0; ii<chars-i-1; ++ii) vv /= ALPHANUMERIC_SIZE;
 							os << ALPHANUMERIC_TABLE[vv % ALPHANUMERIC_SIZE];
 						}
 					}
