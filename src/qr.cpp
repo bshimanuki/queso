@@ -69,11 +69,13 @@ struct identity {
 };
 
 
-template <uint16_t ORDER, uint16_t GENERATOR, uint16_t A=2>
+template <uint16_t _ORDER, uint16_t GENERATOR, uint16_t A=2, uint16_t _C=0>
 class GF {
 	uint8_t v;
-	static_assert(ORDER <= 256, "Order greater than 256 does not fit in uint8_t");
 public:
+	static constexpr uint16_t ORDER = _ORDER;
+	static_assert(ORDER <= 256, "Order greater than 256 does not fit in uint8_t");
+	static constexpr uint16_t C = _C;
 	static constexpr uint16_t SUBORDER = ORDER - 1; // order of multiplicative subgroup
 private:
 	static constexpr auto _LOG_ANTILOG_PAIR = [] {
@@ -483,23 +485,33 @@ public:
 	// num_syndromes: the hamming distance (equal to the number of error correcting words in a perfect code)
 	// erasures: positions of known erasures
 	Poly error_correct(size_t num_syndromes, const std::vector<size_t> &erasures={}) const {
-		Poly gen = generator(num_syndromes);
 		Vector<T> syndromes(num_syndromes);
 		bool has_errors = false;
 		for (size_t i=0; i<num_syndromes; ++i) {
-			syndromes[i] = (*this)(T::antilog(i));
+			syndromes[i] = (*this)(T::antilog(i + T::C));
 			has_errors |= (bool) syndromes[i];
 		}
 		if (!has_errors) return *this; // short-circuit
-		// TODO: erasures
-		size_t nu = num_syndromes / 2; // number of corrections
+		if (erasures.size() > num_syndromes) throw std::runtime_error("more erasures than error correction redundancy");
+		// max number of corrections
+		const size_t s = erasures.size();
+		const size_t e = (num_syndromes - s) / 2;
+		size_t nu = s + e;
 		Matrix<T> mat_locator(nu, nu);
 		Vector<T> b_locator(mat_locator.m);
 		for (size_t i=0; i<mat_locator.m; ++i) {
-			for (size_t j=0; j<mat_locator.n; ++j) {
-				mat_locator(i, j) = syndromes(i + j);
+			if (i < e) {
+				for (size_t j=0; j<mat_locator.n; ++j) {
+					mat_locator(i, j) = syndromes(i + j);
+				}
+				b_locator(i) = syndromes(nu + i);
+			} else {
+				const size_t ii = i - e;
+				for (size_t j=0; j<mat_locator.n; ++j) {
+					mat_locator(i, j) = T::antilog(erasures[ii]).inv().pow(nu - j);
+				}
+				b_locator(i) = 1;
 			}
-			b_locator(i) = syndromes(nu + i);
 		}
 		auto [locator_solvable, locator_coefs] = mat_locator.solve(b_locator);
 		if (!locator_solvable) throw std::runtime_error("could not solve for locator polynomial");
@@ -516,7 +528,7 @@ public:
 		Vector<T> b_err(mat_err.m);
 		for (size_t i=0; i<mat_err.m; ++i) {
 			for (size_t j=0; j<mat_err.n; ++j) {
-				mat_err(i, j) = T::antilog(locations[j]).pow(i);
+				mat_err(i, j) = T::antilog(locations[j]).pow(i + T::C);
 			}
 			b_err(i) = syndromes(i);
 		}
@@ -589,8 +601,8 @@ CellValue operator-(const CellValue &v) {
 	}
 }
 
-using GF256 = GF<256, 0b100011101>;
-using GF16 = GF<16, 0b10011>;
+using GF256 = GF<256, 0b100011101, 2, 0>;
+using GF16 = GF<16, 0b10011, 2, 1>;
 using GF2 = GF<2, 0b10, 1>;
 class QR {
 	std::vector<std::vector<CellValue>> grid;
@@ -659,12 +671,14 @@ public:
 	uint8_t get_format() const {
 		auto bits = format_bit_proportions();
 		uint16_t guess = 0;
+		std::vector<size_t> erasures;
 		for (size_t i=0; i<bits.size(); ++i) {
 			if (bits[i] > 0.5) guess |= 1 << i;
+			if (0.4 < bits[i] && bits[i] < 0.6) erasures.push_back(i);
 		}
 		guess ^= FORMAT_MASK;
 		Poly p = Poly<GF16>::FromBinary(guess);
-		p = p.error_correct(6);
+		p = p.error_correct(6, erasures);
 		uint64_t format = p.to_binary();
 		if (format ^ (format & 0x7fff)) throw std::runtime_error(Formatter() << "computed invalid format std::string " << std::hex << format);
 		return format >> 10;
