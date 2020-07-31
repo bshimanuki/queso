@@ -393,7 +393,10 @@ public:
 		return this->rend() - it - (int) 1;
 	}
 	void set(size_t n, const T &c=1) {
-		if (n >= this->size()) this->resize(n + 1, 0);
+		if (n >= this->size()) {
+			if (c == 0) return;
+			this->resize(n + 1, 0);
+		}
 		(*this)[n] = c;
 	}
 
@@ -513,7 +516,7 @@ public:
 		Vector<T> b_err(mat_err.m);
 		for (size_t i=0; i<mat_err.m; ++i) {
 			for (size_t j=0; j<mat_err.n; ++j) {
-				mat_err(i, j) = T::antilog(locations[j]).pow(1 + i);
+				mat_err(i, j) = T::antilog(locations[j]).pow(i);
 			}
 			b_err(i) = syndromes(i);
 		}
