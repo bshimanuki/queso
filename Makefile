@@ -3,7 +3,7 @@ CC = g++
 # OPT_LVL = -O3
 OPT_LVL = -g
 
-CCFLAGS = -std=c++1z -Wall
+CCFLAGS = -std=c++1z -Wall -Werror
 CCFLAGS += $(OPT_LVL)
 
 SRCDIR = src
@@ -14,9 +14,12 @@ BINDIR = bin
 
 SRCS = $(wildcard $(SRCDIR)/*.cpp)
 HDRS = $(wildcard $(INCDIR)/*.h)
+SRCS_LIBS := $(filter $(patsubst $(INCDIR)/%.h, $(SRCDIR)/%.cpp, $(HDRS)), $(SRCS))
+SRCS_MAINS := $(filter-out $(SRCS_LIBS), $(SRCS))
 OBJS := $(patsubst $(SRCDIR)/%.cpp, $(OBJDIR)/%.o, $(SRCS))
+OBJS_LIBS := $(patsubst $(SRCDIR)/%.cpp, $(OBJDIR)/%.o, $(SRCS_LIBS))
 DEPS := $(patsubst $(SRCDIR)/%.cpp, $(OBJDIR)/%.d, $(SRCS))
-BINS := $(patsubst $(SRCDIR)/%.cpp, $(BINDIR)/%, $(SRCS))
+BINS := $(patsubst $(SRCDIR)/%.cpp, $(BINDIR)/%, $(SRCS_MAINS))
 PYTHON_MAINS := $(wildcard */__main__.py)
 PYSCRIPTS := $(patsubst %/__main__.py, $(BINDIR)/%, $(PYTHON_MAINS))
 
@@ -27,11 +30,11 @@ LDFLAGS = -lpthread -lz -lm $(GTK_LIB)
 
 $(OBJDIR)/%.o: $(SRCDIR)/%.cpp
 	@mkdir -p $(OBJDIR)
-	$(CC) -MMD $(CCFLAGS) -o $@ -c $< $(INC)
+	$(CC) -MMD -MP $(CCFLAGS) -o $@ -c $< $(INC)
 
-$(BINDIR)/%: $(SRCDIR)/%.cpp
+$(BINDIR)/%: $(OBJDIR)/%.o $(OBJS_LIBS)
 	@mkdir -p $(BINDIR)
-	$(CC) $(CCFLAGS) -o $@ $< $(INC) $(LDFLAGS)
+	$(CC) $(CCFLAGS) -o $@ $^ $(INC) $(LDFLAGS)
 
 $(BINDIR)/%: %/__main__.py
 	@mkdir -p $(BINDIR)
@@ -39,6 +42,8 @@ $(BINDIR)/%: %/__main__.py
 	chmod +x $@
 
 .PHONY: clean external
+
+.SECONDARY: $(OBJS) $(DEPS)
 
 default: $(BINS) $(PYSCRIPTS)
 
