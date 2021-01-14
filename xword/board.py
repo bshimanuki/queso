@@ -179,7 +179,7 @@ class Square(object):
 		else:
 			c, prob = self.get_contents(**kwargs)
 		if output == 'html':
-			border_style = '2px solid #000000'
+			border_style = '2px solid black'
 			styles = []
 			if display:
 				white = np.array([1, 1, 1], dtype=np.float)
@@ -396,6 +396,7 @@ class Board(object):
 			numbered_cells: Optional[np.ndarray],
 			bar_below: Optional[np.ndarray],
 			bar_right: Optional[np.ndarray],
+			force_number: bool = False,
 	):
 		assert len(cells.shape) == 2
 		if background is None:
@@ -438,7 +439,7 @@ class Board(object):
 			entry = None
 			for x in range(self.shape[1]):
 				square = self.grid[y, x]
-				if numbered_cells[y, x]:
+				if not force_number and numbered_cells[y, x]:
 					n += 1
 					square.number = n
 				if y - 1 >= 0:
@@ -460,6 +461,8 @@ class Board(object):
 				if square.is_cell:
 					if square.left is None or not square.left.is_cell or square.left.bar_right:
 						if not square.bar_right and square.right is not None and square.right.is_cell:
+							if force_number:
+								square.number = True
 							if square.number:
 								entry = Entry(self, (y, x), Direction.ACROSS)
 								self.entries[Direction.ACROSS].append(entry)
@@ -474,6 +477,8 @@ class Board(object):
 				if square.is_cell:
 					if square.up is None or not square.up.is_cell or square.up.bar_below:
 						if not square.bar_below and square.down is not None and square.down.is_cell:
+							if force_number:
+								square.number = True
 							if square.number:
 								entry = Entry(self, (y, x), Direction.DOWN)
 								self.entries[Direction.DOWN].append(entry)
@@ -482,6 +487,13 @@ class Board(object):
 						else:
 							crossless += 1
 		self.entries[Direction.DOWN] = sorted(self.entries[Direction.DOWN])
+		if force_number:
+			for y in range(self.shape[0]):
+				for x in range(self.shape[1]):
+					square = self.grid[y, x]
+					if square.number:
+						n += 1
+						square.number = n
 		if crossless:
 			logging.warning('{} cells are missing crosses'.format(crossless))
 		if numberless:
@@ -576,7 +588,7 @@ class Board(object):
 		entry_i = 0
 		strings = []
 		if output == 'html':
-			strings.append('<meta name="generator" content="Sheets"/>')
+			strings.append('<meta content="text/html; charset=utf-8"/><google-sheets-html-origin/>')
 			strings.append('<table><tbody>')
 		for board_y, row_board_kwargs in enumerate(board_kwargs):
 			if board_y != 0:

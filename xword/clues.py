@@ -143,7 +143,7 @@ class TrackerBase(abc.ABC):
 	use_proxy = True
 	parse_json = False
 	site_gave_answers = False # fetch will set to True on returned results
-	proxy_num_tasks = 5 # number of proxies to try for each clue
+	proxy_num_tasks = 2 # number of proxies to try for each clue
 	redundant_fetch = False # set to True if redundant for parent class
 	# subclasses should override
 	expected_answers = True

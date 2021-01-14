@@ -84,6 +84,7 @@ class Server(object):
 			clues_file : Optional[str] = None,
 			entries_file : Optional[str] = None,
 			output_file : Optional[str] = None,
+			force_number : Optional[bool] = False,
 	):
 		# state variables
 		self.board = None # type: Optional[Board]
@@ -95,6 +96,7 @@ class Server(object):
 		self._clues_file = clues_file
 		self._entries_file = entries_file
 		self._output_file = output_file
+		self._force_number = force_number
 
 		# board solving variables
 		self.iterations = 30
@@ -136,7 +138,7 @@ class Server(object):
 		return self._output_file or self.OUTPUT_FILE
 
 	def set_image(self, img : np.ndarray, loading_mode : bool = False) -> None:
-		self.board = make_board(img)
+		self.board = make_board(img, force_number=self._force_number)
 		self.set_output()
 		self.solve_board(loading_mode=loading_mode)
 
@@ -293,6 +295,7 @@ def main():
 	parser.add_argument('--clues', '-c', help='Text file to read clues from.')
 	parser.add_argument('--entries', '-e', help='Text file to read entry scores from.')
 	parser.add_argument('--output', '-o', help='Output file to write html (same data that is copied to the clipboard).')
+	parser.add_argument('--force-number', action='store_true', help='Insert numbers by board structure rather than detecting text in a corner.')
 	parser.add_argument('--clip', action='store_true', help='Use the clipboard contents on startup instead of loading from files. (Changes in clipboard contents are always used.)')
 	args = parser.parse_args()
 
@@ -301,6 +304,7 @@ def main():
 		clues_file=args.clues,
 		entries_file=args.entries,
 		output_file=args.output,
+		force_number=args.force_number,
 	)
 	if args.clip:
 		server.check_clipboard()

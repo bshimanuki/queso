@@ -331,7 +331,7 @@ def cluster_splits(xs: np.ndarray, stop_factor: float = 2, stop_base_idx: int = 
 	return splits
 
 
-def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple[float, float]) -> Board:
+def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple[float, float], force_number: bool = False) -> Board:
 	'''
 	Do grid analysis. Returns a Board.
 
@@ -515,10 +515,10 @@ def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple
 	cells_border_below_trimmed = cells_border_below[y0:y1+1, x0:x1+1]
 	cells_border_right_trimmed = cells_border_right[y0:y1+1, x0:x1+1]
 
-	return Board(cells_trimmed, cells_background_trimmed, numbered_cells_trimmed, cells_border_below_trimmed, cells_border_right_trimmed)
+	return Board(cells_trimmed, cells_background_trimmed, numbered_cells_trimmed, cells_border_below_trimmed, cells_border_right_trimmed, force_number=force_number)
 
 
-def make_board(im : np.ndarray) -> Board:
+def make_board(im : np.ndarray, force_number : bool = False) -> Board:
 	if im.ndim == 2:
 		im = im[..., np.newaxis]
 	if im.ndim == 3 and im.shape[-1] == 4:
@@ -542,7 +542,7 @@ def make_board(im : np.ndarray) -> Board:
 	save('combined.png', combined)
 	save('c.png', im)
 
-	board = analyze_grid(im, square_size, offset)
+	board = analyze_grid(im, square_size, offset, force_number=force_number)
 	logging.info('board shape: {}x{}'.format(*board.shape))
 
 	return board
