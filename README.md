@@ -1,10 +1,12 @@
 # Puzzle Hunt Utils
 
-## Install Dependencies
+## Install Dependencies and build
 ```
 git submodule update --init --recursive
-sudo apt install gtk+3 xclip python3-pip # or brew for mac
+sudo apt install build-essential gtk+3 xclip python3-pip # or brew for mac
 pip3 install --user -r requirements.txt # or in a venv
+
+make # build in ./bin
 ```
 
 ## Tools
@@ -14,11 +16,7 @@ Shell script to convert stdin to html and copy to the clipboard.
 
 ## Programs
 
-Run `make` to build all programs into `./bin`.
-
-Python 3 dependencies are in `requirements.txt`. Run `pip3 install --user -r requirements.txt` to install (or use a virtual environment).
-
-### `wordsearch`
+### Wordsearch Finder
 ```
 Find words in a grid. Reads from stdin if GRID_FILE not specified. Prints the
 grid highlighted with entries followed by a list of results.
@@ -47,7 +45,7 @@ Usage:
 
 Consider piping to `tools/copy_as_html` to copy to the clipboard in a sheet-pastable format.
 
-### `xword`
+### Crossword Solver
 ```
 usage: xword [-h] [--image IMAGE] [--clues CLUES] [--entries ENTRIES]
              [--output OUTPUT] [--clip]
@@ -101,3 +99,14 @@ optional arguments:
 ```
 
 The clue answer candidates are fetched in about a minute, and the rest takes about 10 seconds.
+
+### QR Code Decoder
+```
+Attempt to decode a QR code from text input. Input should be lines of symbols, with [1#+*@Xx] for black, [ .0Oo_-] for white, and [=?] for unknown.
+Usage:
+  qr [OPTION...] [PATH]
+
+  -h, --help                help
+  -a, --all_format_options  try all 32 possible format
+  -d, --debug               show debugging steps
+```
