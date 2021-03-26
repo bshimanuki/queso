@@ -84,6 +84,7 @@ class Server(object):
 			clues_file : Optional[str] = None,
 			entries_file : Optional[str] = None,
 			output_file : Optional[str] = None,
+			fft : Optional[bool] = False,
 			force_number : Optional[bool] = False,
 	):
 		# state variables
@@ -97,6 +98,9 @@ class Server(object):
 		self._entries_file = entries_file
 		self._output_file = output_file
 		self._force_number = force_number
+
+		# settings
+		self.board_extract_method = 'fft' if fft else None
 
 		# board solving variables
 		self.iterations = 30
@@ -138,7 +142,7 @@ class Server(object):
 		return self._output_file or self.OUTPUT_FILE
 
 	def set_image(self, img : np.ndarray, loading_mode : bool = False) -> None:
-		self.board = make_board(img, force_number=self._force_number)
+		self.board = make_board(img, method=self.board_extract_method, force_number=self._force_number)
 		self.set_output()
 		self.solve_board(loading_mode=loading_mode)
 
@@ -297,6 +301,7 @@ def main():
 	parser.add_argument('--output', '-o', help='Output file to write html (same data that is copied to the clipboard).')
 	parser.add_argument('--force-number', action='store_true', help='Insert numbers by board structure rather than detecting text in a corner.')
 	parser.add_argument('--clip', action='store_true', help='Use the clipboard contents on startup instead of loading from files. (Changes in clipboard contents are always used.)')
+	parser.add_argument('--fft', action='store_true', help='Use an fft based board detection instead of line detection. Requires that square sizes are exactly equal.')
 	args = parser.parse_args()
 
 	server = Server(
@@ -304,6 +309,7 @@ def main():
 		clues_file=args.clues,
 		entries_file=args.entries,
 		output_file=args.output,
+		fft=args.fft,
 		force_number=args.force_number,
 	)
 	if args.clip:

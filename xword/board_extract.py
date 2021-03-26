@@ -17,8 +17,47 @@ from .board import Board
 blacker = np.fmin
 whiter = np.fmax
 
+RECIPROCAL_BORDER_PROPORTION = 16
 SAVE_IMAGES = False
 
+
+def get_gcd(xs: List[float], init_max_denom: int = 8, init_thresh: float = 1e-1) -> Tuple[float, int]:
+	'Returns gcd of inliers and number of inliers.'
+	max_denom = init_max_denom
+	thresh = init_thresh
+	denom_power_factor = 0.9
+	thresh_scaling_factor = 0.8
+
+	def is_approx(a: float, b: float, thresh: float = 0.1) -> bool:
+		return a + thresh > b and a < b + thresh
+	weight = 0
+	val = None
+	n = 0
+
+	for x in xs:
+		if val is None:
+			val = x
+			weight = 1
+			n += 1
+		else:
+			if x > val:
+				f = Fraction(x / val).limit_denominator(int(max_denom))
+			else:
+				f = 1 / Fraction(val / x).limit_denominator(int(max_denom))
+			if is_approx(float(f), x / val, thresh=thresh):
+				n += 1
+				max_denom **= denom_power_factor
+				thresh *= thresh_scaling_factor
+
+				x_weight = f.numerator
+				x_val = x / f.numerator
+				weight *= f.denominator
+				val /= f.denominator
+				total = val * weight + x_val * x_weight
+				weight += x_weight
+				val = total / weight
+	assert val is not None
+	return val, n
 
 def autocorrelate(x: np.ndarray) -> np.ndarray:
 	'''
@@ -40,21 +79,37 @@ def autocorrelate(x: np.ndarray) -> np.ndarray:
 def get_mountain_slice(x: np.ndarray, mid: int) -> slice:
 	'''Get a slice from a peak at index mid to the bottom of both sides.'''
 	low = mid
-	while low-1 > 0 and x[low-1] < x[low]:
+	while low-1 > 0 and (x[low-1] < x[low] or x[low-1] == x[mid]):
 		low -= 1
 	high = mid
-	while high+1 < len(x) and x[high+1] < x[high]:
+	while high+1 < len(x) and (x[high+1] < x[high] or x[high+1] == x[mid]):
 		high += 1
-	return slice(low, high)
+	return slice(low, high + 1)
 
-def is_far_from_edge(im: np.ndarray, loc: Tuple[int, int], thresh: int = 1) -> bool:
+def is_far_from_edge(im: np.ndarray, loc: Tuple[int, ...], thresh: int = 1) -> bool:
 	assert im.ndim == len(loc)
 	for s, x in zip(im.shape, loc):
 		if x - thresh < 0 or x + thresh >= s:
 			return False
 	return True
 
-def get_interpolated_peak(im: np.ndarray, dis_loc: Tuple[int, int], delta: int = 1, order: int = 2) -> Tuple[np.ndarray, float]:
+def get_interpolated_peak_1d(xs: np.ndarray, dis_loc: int, delta: int = 1, order: int = 2) -> Tuple[float, float]:
+	'''Get the continuous location of a peak from a discrete 1D sample and the value.'''
+	assert is_far_from_edge(xs, (dis_loc,), delta)
+	x_partial = xs[dis_loc-delta:dis_loc+delta+1]
+	spline = scipy.interpolate.UnivariateSpline(
+		np.arange(dis_loc-delta, dis_loc+delta+1),
+		-x_partial, # negative because optimize finds the min
+		k=order,
+	)
+	result = scipy.optimize.minimize(
+		lambda x: spline(x).item(),
+		dis_loc,
+		bounds=((dis_loc-delta, dis_loc+delta),),
+	)
+	return result.x, -spline(*result.x).item()
+
+def get_interpolated_peak_2d(im: np.ndarray, dis_loc: Tuple[int, int], delta: int = 1, order: int = 2) -> Tuple[np.ndarray, float]:
 	'''Get the continuous location of a peak from a discrete 2D sample and the value.'''
 	assert is_far_from_edge(im, dis_loc, delta)
 	y, x = dis_loc
@@ -90,6 +145,8 @@ def save(fname: str, im: np.ndarray, resize: Optional[np.ndarray] = None) -> Non
 	if not SAVE_IMAGES:
 		return
 	out = np.asarray(im)
+	if out.min() > -1e-6 and out.max() < 1 + 1e-6:
+		out = np.maximum(0, np.minimum(1, out))
 	with warnings.catch_warnings():
 		warnings.simplefilter('ignore') # suppress precision loss warning
 		out = skimage.img_as_ubyte(out)
@@ -97,12 +154,42 @@ def save(fname: str, im: np.ndarray, resize: Optional[np.ndarray] = None) -> Non
 		out = cv2.resize(out, resize.shape[1::-1], interpolation=cv2.INTER_NEAREST)
 	imageio.imwrite(fname, out)
 
+def make_thresh_mono(im: np.ndarray) -> np.ndarray:
+	'''Convert to single channel (darkest channel) and threshold the image.'''
+	bw = skimage.img_as_float(im)
+	while bw.ndim > 2:
+		bw = blacker.reduce(bw, axis=-1)
+	median = np.median(bw)
+	if median < 0.5:
+		bw = np.where(bw <= 2 * median, np.zeros_like(bw), np.ones_like(bw))
+	else:
+		bw = np.where(bw < 1 - 2 * (1 - median), np.zeros_like(bw), np.ones_like(bw))
+	return bw
+
 def make_normalized_mono(im: np.ndarray) -> np.ndarray:
 	'''Convert to single channel (darkest channel) and normalize the image.'''
 	bw = skimage.img_as_float(im)
 	while bw.ndim > 2:
 		bw = blacker.reduce(bw, axis=-1)
 	bw -= np.mean(bw)
+	return bw
+
+def make_lrn_mono(im: np.ndarray, sigma: float = 5) -> np.ndarray:
+	'''Convert to single channel (darkest channel) and perform local response normalization.'''
+	bw = skimage.img_as_float(im)
+	while bw.ndim > 2:
+		bw = blacker.reduce(bw, axis=-1)
+	lr = scipy.ndimage.gaussian_filter(bw, sigma)
+	bw -= lr
+	return bw
+
+def make_window_mono(im: np.ndarray, w: int = 5) -> np.ndarray:
+	'''Convert to single channel (darkest channel) and perform local response normalization.'''
+	bw = skimage.img_as_float(im)
+	while bw.ndim > 2:
+		bw = blacker.reduce(bw, axis=-1)
+	lr = scipy.ndimage.maximum_filter(bw, w)
+	bw -= lr
 	return bw
 
 def get_square_size(im: np.ndarray) -> Tuple[float, float]:
@@ -136,7 +223,7 @@ def get_square_size(im: np.ndarray) -> Tuple[float, float]:
 	for i in range(20): #TODO:edit number of tries
 		dis_loc = np.unravel_index(g.argmax(), g.shape)
 		if is_far_from_edge(g, dis_loc):
-			cont_loc, _ = get_interpolated_peak(g, dis_loc)
+			cont_loc, _ = get_interpolated_peak_2d(g, dis_loc)
 			peaks.append(cont_loc)
 			# print(dis_loc, cont_loc)
 		y_peak_slice = get_mountain_slice(g[:,dis_loc[1]], dis_loc[0])
@@ -154,44 +241,6 @@ def get_square_size(im: np.ndarray) -> Tuple[float, float]:
 	peak_x = np.abs(peak_x)
 	# print(peak_y)
 	# print(peak_x)
-
-	def get_gcd(xs: List[float], init_max_denom: int = 8, init_thresh: float = 1e-1) -> Tuple[float, int]:
-		'Returns gcd of inliers and number of inliers.'
-		max_denom = init_max_denom
-		thresh = init_thresh
-		denom_power_factor = 0.9
-		thresh_scaling_factor = 0.8
-
-		def is_approx(a: float, b: float, thresh: float = 0.1) -> bool:
-			return a + thresh > b and a < b + thresh
-		weight = 0
-		val = None
-		n = 0
-
-		for x in xs:
-			if val is None:
-				val = x
-				weight = 1
-				n += 1
-			else:
-				if x > val:
-					f = Fraction(x / val).limit_denominator(int(max_denom))
-				else:
-					f = 1 / Fraction(val / x).limit_denominator(int(max_denom))
-				if is_approx(float(f), x / val, thresh=thresh):
-					n += 1
-					max_denom **= denom_power_factor
-					thresh *= thresh_scaling_factor
-
-					x_weight = f.numerator
-					x_val = x / f.numerator
-					weight *= f.denominator
-					val /= f.denominator
-					total = val * weight + x_val * x_weight
-					weight += x_weight
-					val = total / weight
-		assert val is not None
-		return val, n
 
 	y, _ = get_gcd(peak_y)
 	x, _ = get_gcd(peak_x)
@@ -274,7 +323,7 @@ def make_grid(im: np.ndarray, square_size: Tuple[float, float], origin: Tuple[fl
 	elif area == 'QII':
 		grid = np.minimum(ys, xs)
 	else:
-		raise NotImplemented()
+		raise NotImplementedError()
 	return grid
 
 def get_offset(im: np.ndarray, square_size: Tuple[float, float]) -> Tuple[Tuple[float, float], float]:
@@ -300,7 +349,7 @@ def get_offset(im: np.ndarray, square_size: Tuple[float, float]) -> Tuple[Tuple[
 	while not is_far_from_edge(g, dis_loc):
 		g[dis_loc] = 0
 		dis_loc = np.unravel_index(g.argmax(), g.shape)
-	cont_loc, peak = get_interpolated_peak(g, dis_loc)
+	cont_loc, peak = get_interpolated_peak_2d(g, dis_loc)
 	offset = cont_loc - np.asarray([(s-1)/2 for s in cor.shape])
 	offset %= square_size
 	return tuple(offset), peak # type: ignore # mypy does not determine size
@@ -330,8 +379,136 @@ def cluster_splits(xs: np.ndarray, stop_factor: float = 2, stop_base_idx: int = 
 	# print('splits:', splits, diffs[idxs])
 	return splits
 
+def line_detector_seps(im: np.ndarray) -> None:
+	bw = make_thresh_mono(im)
+	y = 1 - np.average(bw, axis=1)
+	x = 1 - np.average(bw, axis=0)
 
-def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple[float, float], force_number: bool = False) -> Board:
+	def get_stride(vs):
+		r = np.zeros_like(vs)
+		stack = []
+		for i, v in enumerate(vs):
+			v_used = 0
+			while stack and stack[-1][1] <= v:
+				pi, pv = stack[-1]
+				r[i - pi] += pv - v_used
+				v_used = pv
+				stack.pop()
+			if stack:
+				pi, pv = stack[-1]
+				r[i - pi] += v - v_used
+			stack.append((i, v))
+		_slice = get_mountain_slice(r, r.argmax())
+		weights = np.zeros_like(r)
+		weights[_slice] = r[_slice]
+		weights[weights < max(r[_slice.start], r[_slice.stop-1])] = 0
+		weights /= weights.sum()
+		stride = weights @ np.arange(len(weights))
+		return stride
+
+	dy_l = np.pad(np.maximum(0, y[1:] - y[:-1]), (1, 0))
+	dy_r = np.pad(np.maximum(0, y[:-1] - y[1:]), (0, 1))
+	y_stride = (get_stride(dy_l) + get_stride(dy_r)) / 2
+	dx_l = np.pad(np.maximum(0, x[1:] - x[:-1]), (1, 0))
+	dx_r = np.pad(np.maximum(0, x[:-1] - x[1:]), (0, 1))
+	x_stride = (get_stride(dx_l) + get_stride(dx_r)) / 2
+
+	stride, n = get_gcd([y_stride, x_stride], init_max_denom=1, init_thresh=1e-2)
+	if n == 2:
+		y_stride /= round(y_stride / stride)
+		x_stride /= round(x_stride / stride)
+
+	def get_sep(dv_l, dv_r, v_stride):
+		dv_conv = scipy.signal.fftconvolve(dv_r, np.flip(dv_l), mode='full')
+		dv_conv[(len(dv_conv)-1)//2+int(v_stride/2)+1:] = 0
+		dv_conv[:(len(dv_conv)-1)//2-int(v_stride/2)] = 0
+		dv_w = (get_interpolated_peak_1d(dv_conv, dv_conv.argmax())[0][0] - (len(dv_conv)-1)/2) / 2
+		if dv_w > 0:
+			dv = np.zeros_like(dv_l)
+			hw = dv_w / 2
+			dv[int(hw):] += (1 - math.modf(hw)[0]) * dv_l[:len(dv)-int(hw)]
+			dv[int(hw)+1:] += math.modf(hw)[0] * dv_l[:len(dv)-int(hw)-1]
+			dv[:len(dv)-int(hw)] += (1 - math.modf(hw)[0]) * dv_r[int(hw):]
+			dv[:len(dv)-int(hw)-1] += math.modf(hw)[0] * dv_r[int(hw)+1:]
+		else:
+			dv = dv_l + dv_r
+
+		w = 2 + int(dv_w)
+		min_stride = max(w, int(v_stride * 2 / 3))
+		mav_stride = int(v_stride * 4 / 3) + 1
+
+		n = len(dv)
+		cdv = np.cumsum(dv)
+		dvcdv = np.cumsum(dv * np.arange(n))
+		dp = np.full(n, -np.inf, dtype=np.float)
+		dp[:mav_stride] = 0
+		dp_l = np.zeros(n, dtype=np.int)
+		for j in range(n):
+			for l in range(min_stride, mav_stride+1):
+				i = j - l
+				dscore = cdv[j] - (cdv[j-w] if j-w >= 0 else 0)
+				score = (dp[i] if i >= 0 else 0) + dscore
+				if score > dp[j]:
+					dp[j] = score
+					dp_l[j] = l
+		last = dp.argmax()
+		yalues = []
+		while last >= 0:
+			p = cdv[last] - (cdv[last-w] if last-w >= 0 else 0)
+			s = dvcdv[last] - (dvcdv[last-w] if last-w >= 0 else 0)
+			mu = s / p if p else (last - 1) - (w - 1) / 2
+			yalues.append((mu, p))
+			l = dp_l[last]
+			if l == 0:
+				break
+			last = last - l
+		yalues = list(reversed(yalues))
+		thresh = max(p for mu, p in yalues) * 0.1
+		yalues = [mu if p > thresh else None for mu, p in yalues]
+		v_sep = []
+		for mu in yalues:
+			if mu is not None:
+				if v_sep:
+					skipped = max(1, round((mu - v_sep[-1]) / v_stride))
+					delta = (mu - v_sep[-1]) / skipped
+					for i in range(skipped):
+						v_sep.append(v_sep[-1] + delta)
+				else:
+					v_sep.append(mu)
+		return v_sep
+
+	y_sep = np.asarray(get_sep(dy_l, dy_r, y_stride), dtype=np.float) + 1/2
+	x_sep = np.asarray(get_sep(dx_l, dx_r, x_stride), dtype=np.float) + 1/2
+	return y_sep, x_sep
+
+
+def rescale(im: np.ndarray, y_sep: List[float], w: int) -> Board:
+	'''
+	Rescale image according to each pair of y_sep corresponds to w pixels.
+	y_sep should be presorted.
+	'''
+	s = np.pad(np.cumsum(im, axis=0), ((1, 0), *((0, 0),)*(im.ndim-1)))
+	out = np.zeros((w*max(0, len(y_sep)-1), *im.shape[1:]), dtype=np.float)
+	y_sep = np.asarray(y_sep)
+	ww = (y_sep[1:] - y_sep[:-1]) / w
+	a = np.linspace(y_sep[:-1], y_sep[1:], w, endpoint=False, axis=-1)
+	b = a + ww[..., None]
+	af, ai = np.modf(a)
+	ai = ai.astype(np.int)
+	bf, bi = np.modf(b)
+	bi = bi.astype(np.int)
+	out = (s[bi] + bf[(..., *(None,)*(im.ndim-1))] * im[bi]) - (s[ai] + af[(..., *(None,)*(im.ndim-1))] * im[ai])
+	out /= ww[(..., *(None,)*im.ndim)]
+	out = out.reshape((np.prod(out.shape[:2]), *out.shape[2:]))
+	return out
+
+
+def analyze_grid(
+		im: np.ndarray,
+		square_size: Tuple[float, float],
+		offset: Optional[Tuple[float, float]],
+		force_number: bool = False,
+) -> Board:
 	'''
 	Do grid analysis. Returns a Board.
 
@@ -344,13 +521,16 @@ def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple
 	- block: board square without an entry
 	'''
 	assert im.ndim == 3 and im.shape[-1] == 3
-	dy, dx = square_size
 	im = skimage.img_as_float(im)
+	dy, dx = square_size
+	if offset is None:
+		offset = tuple(-s / 2 for s in im.shape[:2])
 	center = tuple(s / 2 for s in im.shape[:2])
 	origin = np.asarray(center) + np.asarray(offset)
+	save('input.png', im)
 
 	# create grid masks
-	width = 1 / 16
+	width = 1 / RECIPROCAL_BORDER_PROPORTION
 	grid_horiz = make_grid(im, square_size, offset, area='horizontal', width=width)[..., np.newaxis]
 	# save('horizontal.png', grid_horiz)
 	grid_vert = make_grid(im, square_size, offset, area='vertical', width=width)[..., np.newaxis]
@@ -384,12 +564,12 @@ def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple
 	if False:
 		# visualize grid separators
 		grid_sep = np.array(grid_middle)
-		grid_sep[y_sep] = 1
-		grid_sep[:,x_sep] = 1
+		grid_sep[y_sep,...,0] = 1
+		grid_sep[:,x_sep,...,0] = 1
 		save('sep.png', grid_sep)
 		grid_cen = np.array(grid_middle)
-		grid_cen[y_cen] = 1
-		grid_cen[:,x_cen] = 1
+		grid_cen[y_cen,...,0] = 1
+		grid_cen[:,x_cen,...,0] = 1
 		save('cen.png', grid_cen)
 
 	# operations to get the average/min/max value of masked squares
@@ -435,7 +615,7 @@ def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple
 	squares_vert = np.abs(squares_vert - squares_background)
 	save('squares_vert.png', squares_vert, resize=im)
 	squares_qii = reduceat_mean(im, grid_qii, y_sep, x_sep, background=squares_background, op=blacker, mean=False)
-	# save('squares_qii.png', squares_qii, resize=im)
+	save('squares_qii.png', squares_qii, resize=im)
 
 	# compute which square candidates are squares in the actual grid
 	squares_topbottom = blacker(np.insert(squares_horiz, 0, 0, axis=0)[:-1], squares_horiz)
@@ -518,13 +698,7 @@ def analyze_grid(im: np.ndarray, square_size: Tuple[float, float], offset: Tuple
 	return Board(cells_trimmed, cells_background_trimmed, numbered_cells_trimmed, cells_border_below_trimmed, cells_border_right_trimmed, force_number=force_number)
 
 
-def make_board(im : np.ndarray, force_number : bool = False) -> Board:
-	if im.ndim == 2:
-		im = im[..., np.newaxis]
-	if im.ndim == 3 and im.shape[-1] == 4:
-		# remove alpha channel
-		im = im[..., :3]
-
+def fft_square_size_and_offset(im: np.ndarray) -> Tuple[Tuple[float, float], Tuple[float, float]]:
 	square_size = get_square_size(im)
 	logging.info('Square size: {}'.format(square_size))
 	offset, peak = get_offset(im, square_size)
@@ -542,7 +716,33 @@ def make_board(im : np.ndarray, force_number : bool = False) -> Board:
 	save('combined.png', combined)
 	save('c.png', im)
 
+	return square_size, offset
+
+
+def make_board(im: np.ndarray, method: Optional[str] = None, force_number: bool = False) -> Board:
+	if im.ndim == 2:
+		im = im[..., np.newaxis]
+	if im.ndim == 3 and im.shape[-1] == 4:
+		# remove alpha channel
+		im = im[..., :3]
+	if method == None:
+		method = 'lines'
+
+	if method == 'fft':
+		square_size, offset = fft_square_size_and_offset(im)
+	elif method == 'lines':
+		w = RECIPROCAL_BORDER_PROPORTION
+		im = skimage.img_as_float(im)
+		y_sep, x_sep = line_detector_seps(im)
+		im_y = rescale(im, y_sep, w)
+		im = np.swapaxes(rescale(np.swapaxes(im_y, 0, 1), x_sep, w), 0, 1)
+		square_size = (w, w)
+		offset = None
+	else:
+		raise ValueError('method {} not recognized'.format(method))
+
 	board = analyze_grid(im, square_size, offset, force_number=force_number)
+
 	logging.info('board shape: {}x{}'.format(*board.shape))
 
 	return board
