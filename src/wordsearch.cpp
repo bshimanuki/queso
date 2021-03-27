@@ -207,7 +207,7 @@ public:
 	void go(size_t y, size_t x, Direction dir, const Trie *trie, const WordSearchOptions &options) {
 		if (y < 0 || y >= rows() || x < 0 || x >= cols()) return;
 		if (used[y][x]) return;
-		if (dir != NOOP && options.removed) {
+		if (options.removed) {
 			for (size_t i=0; i<trie->children.size(); ++i) {
 				if (trie->children[i]) {
 					partial.emplace_back(itoc(i), NOOP, true);

@@ -19,6 +19,7 @@ whiter = np.fmax
 
 RECIPROCAL_BORDER_PROPORTION = 16
 SAVE_IMAGES = False
+SQUARE_LIMIT = 200
 
 
 def get_gcd(xs: List[float], init_max_denom: int = 8, init_thresh: float = 1e-1) -> Tuple[float, int]:
@@ -418,7 +419,7 @@ def line_detector_seps(im: np.ndarray) -> None:
 		y_stride /= round(y_stride / stride)
 		x_stride /= round(x_stride / stride)
 
-	def get_sep(dv_l, dv_r, v_stride):
+	def get_sep(dv_l, dv_r, v_stride, thresh=1e-1):
 		dv_conv = scipy.signal.fftconvolve(dv_r, np.flip(dv_l), mode='full')
 		dv_conv[(len(dv_conv)-1)//2+int(v_stride/2)+1:] = 0
 		dv_conv[:(len(dv_conv)-1)//2-int(v_stride/2)] = 0
@@ -452,21 +453,21 @@ def line_detector_seps(im: np.ndarray) -> None:
 					dp[j] = score
 					dp_l[j] = l
 		last = dp.argmax()
-		yalues = []
+		values = []
 		while last >= 0:
 			p = cdv[last] - (cdv[last-w] if last-w >= 0 else 0)
 			s = dvcdv[last] - (dvcdv[last-w] if last-w >= 0 else 0)
 			mu = s / p if p else (last - 1) - (w - 1) / 2
-			yalues.append((mu, p))
+			values.append((mu, p))
 			l = dp_l[last]
 			if l == 0:
 				break
 			last = last - l
-		yalues = list(reversed(yalues))
-		thresh = max(p for mu, p in yalues) * 0.1
-		yalues = [mu if p > thresh else None for mu, p in yalues]
+		values = list(reversed(values))
+		p_thresh = max((p for mu, p in values[1:-1]), default=0) * thresh
+		values = [mu if p > p_thresh else None for mu, p in values]
 		v_sep = []
-		for mu in yalues:
+		for mu in values:
 			if mu is not None:
 				if v_sep:
 					skipped = max(1, round((mu - v_sep[-1]) / v_stride))
@@ -734,6 +735,8 @@ def make_board(im: np.ndarray, method: Optional[str] = None, force_number: bool 
 		w = RECIPROCAL_BORDER_PROPORTION
 		im = skimage.img_as_float(im)
 		y_sep, x_sep = line_detector_seps(im)
+		if len(y_sep) > SQUARE_LIMIT or len(x_sep) > SQUARE_LIMIT:
+			raise RuntimeError('line detector found {} vertical lines and {} horizontal lines'.format(len(y_sep), len(x_sep)))
 		im_y = rescale(im, y_sep, w)
 		im = np.swapaxes(rescale(np.swapaxes(im_y, 0, 1), x_sep, w), 0, 1)
 		square_size = (w, w)

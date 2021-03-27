@@ -3,7 +3,7 @@
 ## Install Dependencies and build
 ```
 git submodule update --init --recursive
-sudo apt install build-essential gtk+3 xclip python3-pip # or brew for mac
+sudo apt install build-essential libgtk-3-dev xclip python3-pip # or brew for mac
 pip3 install --user -r requirements.txt # or in a venv
 
 make # build in ./bin
