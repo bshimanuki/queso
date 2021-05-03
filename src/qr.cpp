@@ -24,26 +24,13 @@ constexpr char WHITE[] = " .0Oo_-";
 constexpr char UNKNOWN[] = "=?";
 constexpr char BLOCK[] = "█";
 
-
-class Options {
-public:
-	bool all_format_options = false;
-	bool raw_codewords = false;
-	std::string path = "-";
-
-	~Options() {};
-	Options(void*) {};
-
-} options{nullptr};
-
-
-namespace std {
-	const std::string& to_string(const std::string &s) {return s;}
-}
-template <typename T> auto make_value(T &value, bool set_default=!std::is_same<bool,T>::value) {
-	if (set_default) return cxxopts::value<T>(value)->default_value(std::to_string(value));
-	return cxxopts::value<T>(value);
-}
+// QR mode indicators
+constexpr int MODE_TERMINATOR = 0b0000;
+constexpr int MODE_NUMERIC = 0b0001;
+constexpr int MODE_ALPHANUMERIC = 0b0010;
+constexpr int MODE_BYTE = 0b0100;
+constexpr int MODE_KANJI = 0b1000;
+constexpr int MODE_ECI = 0b0111;
 
 
 class Formatter {
@@ -61,6 +48,32 @@ template<typename A, typename B>
 std::ostream& operator<<(std::ostream& os, const std::pair<A, B> &p) {
 	os << "(" << p.first << ", " << p.second << ")";
 	return os;
+}
+
+
+struct Options {
+	bool all_format_options = false;
+	bool raw_codewords = false;
+	std::string path = "-";
+	int encoding_mode = -1;
+
+	void set_encoding(const std::string &encoding) {
+		if (encoding == "detect") return;
+		if (encoding == "numeric") encoding_mode = MODE_NUMERIC;
+		else if (encoding == "alpha") encoding_mode = MODE_ALPHANUMERIC;
+		else if (encoding == "byte") encoding_mode = MODE_BYTE;
+		else throw std::invalid_argument(Formatter() << "encoding should be one of default, numeric, alpha, byte");
+		raw_codewords = true;
+	}
+} options;
+
+
+namespace std {
+	const std::string& to_string(const std::string &s) {return s;}
+}
+template <typename T> auto make_value(T &value, bool set_default=!std::is_same<bool,T>::value) {
+	if (set_default) return cxxopts::value<T>(value)->default_value(std::to_string(value));
+	return cxxopts::value<T>(value);
 }
 
 
@@ -609,6 +622,7 @@ class QR {
 	std::vector<std::vector<CellValue>> grid;
 	size_t n;
 	int v;
+	Options options;
 
 	void validate() const {
 		for (size_t i=0; i<grid.size(); ++i) {
@@ -651,6 +665,10 @@ public:
 		validate();
 	}
 	QR(size_t n) : QR(std::vector<std::vector<CellValue>>(n, std::vector<CellValue>(n, CellValue::UNKNOWN))) {}
+
+	void set_options(const Options &options) {
+		this->options = options;
+	}
 
 	std::array<float, PADDED_FORMAT_BITS> format_bit_proportions() const {
 		auto f = [](CellValue v) -> double {
@@ -859,8 +877,7 @@ public:
 	}
 
 	// format is 5 bits, default to detect format
-	// if error_correct is false, read data bits without error correction
-	std::string solve(uint8_t format=0xff, bool error_correct=true) const {
+	std::string solve(uint8_t format=0xff) const {
 		if (format == 0xff) format = get_format();
 		uint8_t level = format >> 3;
 		uint8_t mask = format & 7;
@@ -876,7 +893,9 @@ public:
 				block_i = 0;
 				++group_i;
 			}
-			if (error_correct) {
+			if (options.raw_codewords) {
+				std::copy(codewords.begin(), codewords.end(), std::back_inserter(datawords));
+			} else {
 				const auto &versionlevel = version.groups[group_i];
 				// first codewords are highest order terms
 				Poly<GF256> p(codewords.rbegin(), codewords.rend());
@@ -887,14 +906,12 @@ public:
 				if (p.size() > versionlevel.datawords) throw std::runtime_error(Formatter() << "error correction yielded bytes at out of range locations");
 				p.resize(versionlevel.datawords, 0);
 				std::transform(p.rbegin(), p.rend(), std::back_inserter(datawords), [](GF256 x){return x();} );
-			} else {
-				std::copy(codewords.begin(), codewords.end(), std::back_inserter(datawords));
 			}
 		}
-		return decode(datawords, v);
+		return decode(datawords, v, options);
 	}
 
-	static std::string decode(const std::vector<uint8_t> &datawords, size_t version) {
+	static std::string decode(const std::vector<uint8_t> &datawords, size_t version, const Options &options) {
 		std::ostringstream os;
 		uint64_t buffer = 0;
 		size_t bit_length = 0;
@@ -916,14 +933,14 @@ public:
 		while (index < datawords.size()) {
 			if (length) {
 				switch (mode) {
-				case 0b0001: { // numeric
+				case MODE_NUMERIC: {
 						size_t digits = std::min((size_t) 3, length);
 						uint64_t v = read(3 * digits + 1);
 						length -= digits;
 						os << std::setfill('0') << std::setw(digits) << v;
 					}
 					break;
-				case 0b0010: { // alphanumeric
+				case MODE_ALPHANUMERIC: {
 						size_t chars = std::min((size_t) 2, length);
 						uint64_t v = read(5 * chars + 1);
 						length -= chars;
@@ -934,13 +951,13 @@ public:
 						}
 					}
 					break;
-				case 0b0100: { // byte
+				case MODE_BYTE: {
 						char c = read(8);
 						os << c;
 						--length;
 					}
 					break;
-				case 0b1000: { // kanji
+				case MODE_KANJI: {
 						// character range 0x8140-0x9ffc has offset 0x8140
 						// character range 0xe040-0xebbf has offset 0xc140
 						wchar_t wc;
@@ -957,33 +974,35 @@ public:
 			} else {
 				// new mode
 				mode = read(4);
+				if (options.encoding_mode != -1) mode = options.encoding_mode;
 				switch (mode) {
-				case 0b0000: { // terminator
+				case MODE_TERMINATOR: {
 						// skip to end
 						index = datawords.size();
 					}
 					break;
-				case 0b0001: { // numeric
+				case MODE_NUMERIC: {
 						length = read(std::array{10, 12, 14}.at(versionset));
 					}
 					break;
-				case 0b0010: { // alphanumeric
+				case MODE_ALPHANUMERIC: {
 						length = read(std::array{9, 11, 13}.at(versionset));
 					}
 					break;
-				case 0b0100: { // byte
+				case MODE_BYTE: {
 						length = read(std::array{8, 16, 16}.at(versionset));
 					}
 					break;
-				case 0b1000: { // kanji
+				case MODE_KANJI: {
 						length = read(std::array{8, 10, 12}.at(versionset));
 					}
 					break;
-				case 0b0111: // ECI
+				case MODE_ECI:
 				default:
 					throw std::runtime_error(Formatter() << "unsupported mode " << mode);
 					break;
 				}
+				if (mode == options.encoding_mode) length = -1; // read entire data section
 			}
 		}
 		return os.str();
@@ -1109,18 +1128,20 @@ int main(int argc, char *argv[]) {
 		<< WHITE << "] for white, and ["
 		<< UNKNOWN << "] for unknown.";
 	cxxopts::Options argparse(argv[0] ? argv[0] : "qr", helptext.str());
+	std::string encoding = "detect";
 	argparse.add_options()
 		("h,help", "help")
 		("a,all_format_options", "try all 32 possible formats", make_value(options.all_format_options))
 		("r,raw_codewords", "read data bits without performing error correction", make_value(options.raw_codewords))
+		("e,encoding", "force infinite-length encoding mode (implies -r): detect, byte, alpha, numeric", make_value(encoding), "MODE")
 		("path", "text file representing QR code (default: stdin)", make_value(options.path), "PATH")
 		;
 	argparse.parse_positional({"path"});
-	argparse.allow_unrecognised_options();
 	std::string positional_help = "[PATH]";
 	argparse.positional_help(positional_help);
 
 	auto args = argparse.parse(argc, argv);
+	options.set_encoding(encoding);
 
 	if (args.count("help")) {
 		std::cerr << argparse.help({""});
@@ -1135,12 +1156,13 @@ int main(int argc, char *argv[]) {
 	}
 
 	QR qr(grid);
+	qr.set_options(options);
 	if (options.all_format_options) {
 		for (uint8_t format=0; format<(1<<QR::FORMAT_BITS); ++format) {
 			std::string s;
 			std::string err;
 			try {
-				s = qr.solve(format, !options.raw_codewords);
+				s = qr.solve(format);
 			} catch (const std::exception &e) {
 				err = e.what();
 			}
@@ -1152,7 +1174,7 @@ int main(int argc, char *argv[]) {
 			std::cout << s << std::endl;;
 		}
 	} else {
-		std::cout << qr.solve(0xff, !options.raw_codewords) << std::endl;;
+		std::cout << qr.solve() << std::endl;;
 	}
 }
 
