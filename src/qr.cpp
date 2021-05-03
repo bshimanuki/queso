@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <bitset>
 #include <cassert>
 #include <cctype>
 #include <climits>
@@ -27,7 +28,7 @@ constexpr char BLOCK[] = "█";
 class Options {
 public:
 	bool all_format_options = false;
-	bool debug = false;
+	bool raw_codewords = false;
 	std::string path = "-";
 
 	~Options() {};
@@ -624,7 +625,11 @@ class QR {
 
 	static const Poly<GF2> VERSION_GENERATOR_POLYNOMIAL;
 	static const Poly<GF16> FORMAT_GENERATOR_POLYNOMIAL;
-	static constexpr int FORMAT_BITS = 15;
+public:
+	static constexpr int FORMAT_BITS = 5;
+private:
+	static constexpr int PADDED_FORMAT_BITS = 15;
+	static constexpr int FORMAT_ERROR_CORRECTION_BITS = PADDED_FORMAT_BITS - FORMAT_BITS;
 	static constexpr uint16_t FORMAT_MASK = 0b101010000010010;
 	// bytes
 	static constexpr int PAD_BYTES[] = {236, 17};
@@ -647,7 +652,7 @@ public:
 	}
 	QR(size_t n) : QR(std::vector<std::vector<CellValue>>(n, std::vector<CellValue>(n, CellValue::UNKNOWN))) {}
 
-	std::array<float, FORMAT_BITS> format_bit_proportions() const {
+	std::array<float, PADDED_FORMAT_BITS> format_bit_proportions() const {
 		auto f = [](CellValue v) -> double {
 			switch(v) {
 			case CellValue::BLACK:
@@ -659,11 +664,11 @@ public:
 				return 0.5;
 			}
 		};
-		std::array<float, FORMAT_BITS> bits = {};
+		std::array<float, PADDED_FORMAT_BITS> bits = {};
 		for (size_t c=0; c<FORMAT_SPLIT; ++c) bits[c] += f(grid[FORMAT_OFFSET][c + (c >= ALIGNMENT)]) / 2;
-		for (size_t c=FORMAT_SPLIT; c<FORMAT_BITS; ++c) bits[c] += f(grid[FORMAT_OFFSET][n - (FORMAT_BITS - c)]) / 2;
+		for (size_t c=FORMAT_SPLIT; c<PADDED_FORMAT_BITS; ++c) bits[c] += f(grid[FORMAT_OFFSET][n - (PADDED_FORMAT_BITS - c)]) / 2;
 		for (size_t r=0; r<FORMAT_SPLIT; ++r) bits[r] += f(grid[n - 1 - r][FORMAT_OFFSET]) / 2;
-		for (size_t r=FORMAT_SPLIT; r<FORMAT_BITS; ++r) bits[r] += f(grid[FORMAT_BITS - 1 - r + (FORMAT_BITS - 1 - r >= ALIGNMENT)][FORMAT_OFFSET]) / 2;
+		for (size_t r=FORMAT_SPLIT; r<PADDED_FORMAT_BITS; ++r) bits[r] += f(grid[PADDED_FORMAT_BITS - 1 - r + (PADDED_FORMAT_BITS - 1 - r >= ALIGNMENT)][FORMAT_OFFSET]) / 2;
 		std::reverse(bits.begin(), bits.end()); // QR code order is high to low
 		return bits;
 	}
@@ -681,7 +686,21 @@ public:
 		p = p.error_correct(6, erasures);
 		uint64_t format = p.to_binary();
 		if (format ^ (format & 0x7fff)) throw std::runtime_error(Formatter() << "computed invalid format std::string " << std::hex << format);
-		return format >> 10;
+		return format >> FORMAT_ERROR_CORRECTION_BITS;
+	}
+
+	// compute hamming distance with format
+	float get_format_distance(uint8_t format) const {
+		auto read_bits = format_bit_proportions();
+		Poly p = Poly<GF16>::FromBinary(format << FORMAT_ERROR_CORRECTION_BITS);
+		p += p % FORMAT_GENERATOR_POLYNOMIAL;
+		// half distance because format_bit_proportions measures combined not redundant
+		uint16_t masked_format = p.to_binary() ^ FORMAT_MASK;
+		float half_distance = 0;
+		for (size_t i=0; i<read_bits.size(); ++i) {
+			half_distance += std::abs((masked_format >> i & 1) - read_bits[i]);
+		}
+		return 2 * half_distance;
 	}
 
 	void apply_mask(uint8_t mask) {
@@ -839,8 +858,10 @@ public:
 		return blockdata;
 	}
 
-	std::string solve() const {
-		uint8_t format = get_format();
+	// format is 5 bits, default to detect format
+	// if error_correct is false, read data bits without error correction
+	std::string solve(uint8_t format=0xff, bool error_correct=true) const {
+		if (format == 0xff) format = get_format();
 		uint8_t level = format >> 3;
 		uint8_t mask = format & 7;
 		const Version::VersionLevel &version = get_version(level);
@@ -855,16 +876,20 @@ public:
 				block_i = 0;
 				++group_i;
 			}
-			const auto &versionlevel = version.groups[group_i];
-			// first codewords are highest order terms
-			Poly<GF256> p(codewords.rbegin(), codewords.rend());
-			std::vector<size_t> erasures(_erasures.size());
-			std::transform(_erasures.rbegin(), _erasures.rend(), erasures.begin(), [&p](size_t i) { return p.size() - i; });
-			p = p.error_correct(version.errorwords, erasures);
-			p >>= version.errorwords;
-			if (p.size() > versionlevel.datawords) throw std::runtime_error(Formatter() << "error correction yielded bytes at out of range locations");
-			p.resize(versionlevel.datawords, 0);
-			std::transform(p.rbegin(), p.rend(), std::back_inserter(datawords), [](GF256 x){return x();} );
+			if (error_correct) {
+				const auto &versionlevel = version.groups[group_i];
+				// first codewords are highest order terms
+				Poly<GF256> p(codewords.rbegin(), codewords.rend());
+				std::vector<size_t> erasures(_erasures.size());
+				std::transform(_erasures.rbegin(), _erasures.rend(), erasures.begin(), [&p](size_t i) { return p.size() - i; });
+				p = p.error_correct(version.errorwords, erasures);
+				p >>= version.errorwords;
+				if (p.size() > versionlevel.datawords) throw std::runtime_error(Formatter() << "error correction yielded bytes at out of range locations");
+				p.resize(versionlevel.datawords, 0);
+				std::transform(p.rbegin(), p.rend(), std::back_inserter(datawords), [](GF256 x){return x();} );
+			} else {
+				std::copy(codewords.begin(), codewords.end(), std::back_inserter(datawords));
+			}
 		}
 		return decode(datawords, v);
 	}
@@ -875,7 +900,7 @@ public:
 		size_t bit_length = 0;
 		size_t index = 0;
 		auto read = [&](size_t n) {
-			while (bit_length < n) {
+			while (index < datawords.size() && bit_length < n) {
 				buffer <<= 8;
 				buffer |= datawords.at(index++);
 				bit_length += 8;
@@ -968,11 +993,11 @@ public:
 		if (r == ALIGNMENT || c == ALIGNMENT) return false;
 		if (r == FORMAT_OFFSET) {
 			if (c < FORMAT_SPLIT + 1) return true;
-			if (c >= n - (FORMAT_BITS - FORMAT_SPLIT)) return true;
+			if (c >= n - (PADDED_FORMAT_BITS - FORMAT_SPLIT)) return true;
 		}
 		if (c == FORMAT_OFFSET) {
 			if (r >= n - 1 - FORMAT_SPLIT) return true;
-			if (r < FORMAT_BITS - FORMAT_SPLIT + 1) return true;
+			if (r < PADDED_FORMAT_BITS - FORMAT_SPLIT + 1) return true;
 		}
 		return false;
 	}
@@ -1083,11 +1108,11 @@ int main(int argc, char *argv[]) {
 		<< BLACK << "] for black, ["
 		<< WHITE << "] for white, and ["
 		<< UNKNOWN << "] for unknown.";
-	cxxopts::Options argparse("qr", helptext.str());
+	cxxopts::Options argparse(argv[0] ? argv[0] : "qr", helptext.str());
 	argparse.add_options()
 		("h,help", "help")
-		("a,all_format_options", "try all 32 possible format", make_value(options.all_format_options))
-		("d,debug", "show debugging steps", make_value(options.debug))
+		("a,all_format_options", "try all 32 possible formats", make_value(options.all_format_options))
+		("r,raw_codewords", "read data bits without performing error correction", make_value(options.raw_codewords))
 		("path", "text file representing QR code (default: stdin)", make_value(options.path), "PATH")
 		;
 	argparse.parse_positional({"path"});
@@ -1110,7 +1135,25 @@ int main(int argc, char *argv[]) {
 	}
 
 	QR qr(grid);
-	std::cout << qr.solve() << std::endl;;
+	if (options.all_format_options) {
+		for (uint8_t format=0; format<(1<<QR::FORMAT_BITS); ++format) {
+			std::string s;
+			std::string err;
+			try {
+				s = qr.solve(format, !options.raw_codewords);
+			} catch (const std::exception &e) {
+				err = e.what();
+			}
+			std::cerr << "Format: " << std::bitset<QR::FORMAT_BITS>(format) << " Hamming: " << qr.get_format_distance(format);
+			if (!err.empty()) {
+				std::cerr << " Error: " << err;
+			}
+			std::cerr	<< std::endl;
+			std::cout << s << std::endl;;
+		}
+	} else {
+		std::cout << qr.solve(0xff, !options.raw_codewords) << std::endl;;
+	}
 }
 
 const std::vector<Version> QR::VERSIONS = {
