@@ -3,6 +3,7 @@ import asyncio
 from collections import Counter, defaultdict
 import enum
 import functools
+import gzip
 import html
 import io
 import itertools
@@ -228,9 +229,9 @@ class TrackerBase(abc.ABC):
 					formdump = AsyncStreamWriter()
 					await formdata().write(formdump) # type: ignore # mock class
 					cache_key = self.slugify('-'.join((self.method, url, formdump.dump().decode('utf-8'))))
-				cache_file = os.path.join(CACHE_DIR, cache_key)
+				cache_file = os.path.join(CACHE_DIR, '{}.gz'.format(cache_key))
 				if os.path.isfile(cache_file):
-					with open(cache_file, 'rb') as f:
+					with gzip.open(cache_file, 'rb') as f:
 						doc = f.read().decode('utf-8')
 				else:
 					pending = set()
@@ -299,7 +300,7 @@ class TrackerBase(abc.ABC):
 					else:
 						self.__class__.fetch_success += 1
 						os.makedirs(CACHE_DIR, exist_ok=True)
-						with open(cache_file, 'wb') as f:
+						with gzip.open(cache_file, 'wb') as f:
 							f.write(doc.encode('utf-8'))
 				if doc is not None:
 					return doc
