@@ -33,6 +33,12 @@ constexpr int MODE_KANJI = 0b1000;
 constexpr int MODE_ECI = 0b0111;
 
 
+template<typename A, typename B>
+std::ostream& operator<<(std::ostream& os, const std::pair<A, B> &p) {
+	os << "(" << p.first << ", " << p.second << ")";
+	return os;
+}
+
 class Formatter {
 	std::ostringstream ss;
 public:
@@ -44,16 +50,12 @@ public:
 	operator std::string() const { return ss.str(); }
 	std::string str() const { return *this; }
 };
-template<typename A, typename B>
-std::ostream& operator<<(std::ostream& os, const std::pair<A, B> &p) {
-	os << "(" << p.first << ", " << p.second << ")";
-	return os;
-}
-
 
 struct Options {
 	bool all_format_options = false;
 	bool raw_codewords = false;
+	bool no_error_correct_format = false;
+	bool no_error_correct_data = false;
 	std::string path = "-";
 	int encoding_mode = -1;
 
@@ -701,7 +703,9 @@ public:
 		}
 		guess ^= FORMAT_MASK;
 		Poly p = Poly<GF16>::FromBinary(guess);
-		p = p.error_correct(6, erasures);
+		if (!options.no_error_correct_format) {
+			p = p.error_correct(6, erasures);
+		}
 		uint64_t format = p.to_binary();
 		if (format ^ (format & 0x7fff)) throw std::runtime_error(Formatter() << "computed invalid format std::string " << std::hex << format);
 		return format >> FORMAT_ERROR_CORRECTION_BITS;
@@ -729,7 +733,7 @@ public:
 			case 1:
 				return r % 2 == 0;
 			case 2:
-				return c % 2 == 0;
+				return c % 3 == 0;
 			case 3:
 				return (r + c) % 3 == 0;
 			case 4:
@@ -901,7 +905,9 @@ public:
 				Poly<GF256> p(codewords.rbegin(), codewords.rend());
 				std::vector<size_t> erasures(_erasures.size());
 				std::transform(_erasures.rbegin(), _erasures.rend(), erasures.begin(), [&p](size_t i) { return p.size() - i; });
-				p = p.error_correct(version.errorwords, erasures);
+				if (!options.no_error_correct_data) {
+					p = p.error_correct(version.errorwords, erasures);
+				}
 				p >>= version.errorwords;
 				if (p.size() > versionlevel.datawords) throw std::runtime_error(Formatter() << "error correction yielded bytes at out of range locations");
 				p.resize(versionlevel.datawords, 0);
@@ -1134,6 +1140,8 @@ int main(int argc, char *argv[]) {
 		("a,all_format_options", "try all 32 possible formats", make_value(options.all_format_options))
 		("r,raw_codewords", "read data bits without performing error correction", make_value(options.raw_codewords))
 		("e,encoding", "force infinite-length encoding mode (implies -r): detect, byte, alpha, numeric", make_value(encoding), "MODE")
+		("d,no_error_correct_data", "do not error correct data codewords", make_value(options.no_error_correct_data), "MODE")
+		("f,no_error_correct_format", "do not error correct format and version information", make_value(options.no_error_correct_format), "MODE")
 		("path", "text file representing QR code (default: stdin)", make_value(options.path), "PATH")
 		;
 	argparse.parse_positional({"path"});
