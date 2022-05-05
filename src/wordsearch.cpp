@@ -205,30 +205,29 @@ public:
 	inline size_t cols() const {return grid.empty() ? 0 : grid.front().size();}
 
 	void go(size_t y, size_t x, Direction dir, const Trie *trie, const WordSearchOptions &options) {
-		if (y < 0 || y >= rows() || x < 0 || x >= cols()) return;
-		if (used[y][x]) return;
+		if (trie->end_of_word) {
+			if (options.allow_less || (options.removed == 0 && options.inserted == 0)) {
+				results.push_back(partial);
+			}
+		}
 		if (options.removed) {
 			for (size_t i=0; i<trie->children.size(); ++i) {
-				if (trie->children[i]) {
+				Trie *child = trie->children[i];
+				if (child) {
 					partial.emplace_back(itoc(i), NOOP, true);
 					WordSearchOptions next_options(options);
 					--next_options.removed;
-					go(y, x, dir, trie->children[i], next_options);
+					go(y, x, dir, child, next_options);
 					partial.pop_back();
 				}
 			}
 		}
+		if (y < 0 || y >= rows() || x < 0 || x >= cols()) return;
+		if (used[y][x]) return;
 		used[y][x] = true;
 		partial.emplace_back(grid[y][x], dir, false);
 		char idx = ctoi(grid[y][x]);
 		Trie *child = trie->children[idx];
-		if (child) {
-			if (child->end_of_word) {
-				if (options.allow_less || (options.removed == 0 && options.inserted == 0)) {
-					results.push_back(partial);
-				}
-			}
-		}
 		for (Direction next : {NW, N, NE, W, E, SW, S, SE}) {
 			if (options.max_turns == 0 && dir != NOOP && dir != next) continue;
 			if (options.card_only && next & 1) continue;
@@ -258,7 +257,7 @@ public:
 			partial = Result({y, x});
 			go(y, x, NOOP, &dict, options);
 		}
-		sort(results.begin(), results.end(), [](const Result &a, const Result &b){return a.size() > b.size();});
+		stable_sort(results.begin(), results.end(), [](const Result &a, const Result &b){return a.size() > b.size();});
 	}
 
 	void print_results(ostream &os=cout) const {
@@ -317,7 +316,7 @@ public:
 
 void read_dict(istream &is, Trie *trie) {
 	string w;
-	while (is >> w) {
+	while (getline(is, w)) {
 		w.erase(remove_if(w.begin(), w.end(), [](char c){return !isalpha(c);}), w.end());
 		if (w.size() >= min_length) trie->add(w.c_str());
 	}
