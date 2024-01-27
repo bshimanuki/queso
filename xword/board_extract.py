@@ -266,10 +266,10 @@ def make_grid(im: np.ndarray, square_size: Tuple[float, float], origin: Tuple[fl
 		shape = tuple(2*s-1 for s in bw.shape)
 	else:
 		shape = bw.shape
-	grid = np.zeros(shape, dtype=np.float)
+	grid = np.zeros(shape, dtype=float)
 
 	def make_row(s, dx, ox):
-		xs = np.zeros(s, dtype=np.float)
+		xs = np.zeros(s, dtype=float)
 		ox = s / 2 + ox
 
 		beg = 0
@@ -441,9 +441,9 @@ def line_detector_seps(im: np.ndarray) -> None:
 		n = len(dv)
 		cdv = np.cumsum(dv)
 		dvcdv = np.cumsum(dv * np.arange(n))
-		dp = np.full(n, -np.inf, dtype=np.float)
+		dp = np.full(n, -np.inf, dtype=float)
 		dp[:mav_stride] = 0
-		dp_l = np.zeros(n, dtype=np.int)
+		dp_l = np.zeros(n, dtype=int)
 		for j in range(n):
 			for l in range(min_stride, mav_stride+1):
 				i = j - l
@@ -478,8 +478,8 @@ def line_detector_seps(im: np.ndarray) -> None:
 					v_sep.append(mu)
 		return v_sep
 
-	y_sep = np.asarray(get_sep(dy_l, dy_r, y_stride), dtype=np.float) + 1/2
-	x_sep = np.asarray(get_sep(dx_l, dx_r, x_stride), dtype=np.float) + 1/2
+	y_sep = np.asarray(get_sep(dy_l, dy_r, y_stride), dtype=float) + 1/2
+	x_sep = np.asarray(get_sep(dx_l, dx_r, x_stride), dtype=float) + 1/2
 	return y_sep, x_sep
 
 
@@ -489,15 +489,15 @@ def rescale(im: np.ndarray, y_sep: List[float], w: int) -> Board:
 	y_sep should be presorted.
 	'''
 	s = np.pad(np.cumsum(im, axis=0), ((1, 0), *((0, 0),)*(im.ndim-1)))
-	out = np.zeros((w*max(0, len(y_sep)-1), *im.shape[1:]), dtype=np.float)
+	out = np.zeros((w*max(0, len(y_sep)-1), *im.shape[1:]), dtype=float)
 	y_sep = np.asarray(y_sep)
 	ww = (y_sep[1:] - y_sep[:-1]) / w
 	a = np.linspace(y_sep[:-1], y_sep[1:], w, endpoint=False, axis=-1)
 	b = a + ww[..., None]
 	af, ai = np.modf(a)
-	ai = ai.astype(np.int)
+	ai = ai.astype(int)
 	bf, bi = np.modf(b)
-	bi = bi.astype(np.int)
+	bi = bi.astype(int)
 	out = (s[bi] + bf[(..., *(None,)*(im.ndim-1))] * im[bi]) - (s[ai] + af[(..., *(None,)*(im.ndim-1))] * im[ai])
 	out /= ww[(..., *(None,)*im.ndim)]
 	out = out.reshape((np.prod(out.shape[:2]), *out.shape[2:]))
@@ -544,10 +544,10 @@ def analyze_grid(
 	# save('tot.png', tot)
 
 	# compute separators for grid mask regions
-	y_sep = np.concatenate((np.arange(origin[0], 0, -dy)[:0:-1], np.arange(origin[0], im.shape[0], dy))).astype(np.int)
-	x_sep = np.concatenate((np.arange(origin[1], 0, -dx)[:0:-1], np.arange(origin[1], im.shape[1], dx))).astype(np.int)
-	y_cen = np.minimum(y_sep + dy / 2, im.shape[0]-1).astype(np.int)
-	x_cen = np.minimum(x_sep + dx / 2, im.shape[1]-1).astype(np.int)
+	y_sep = np.concatenate((np.arange(origin[0], 0, -dy)[:0:-1], np.arange(origin[0], im.shape[0], dy))).astype(int)
+	x_sep = np.concatenate((np.arange(origin[1], 0, -dx)[:0:-1], np.arange(origin[1], im.shape[1], dx))).astype(int)
+	y_cen = np.minimum(y_sep + dy / 2, im.shape[0]-1).astype(int)
+	x_cen = np.minimum(x_sep + dx / 2, im.shape[1]-1).astype(int)
 	y_sep = np.insert(y_sep, 0, 0)
 	x_sep = np.insert(x_sep, 0, 0)
 	y_cen = np.insert(y_cen, 0, 0)

@@ -14,8 +14,8 @@ class NGram(object):
 	n_alpha = 26
 	n_extra = 2
 	n = n_alpha + n_extra
-	ONE_HOT_START = np.eye(1, n, 26, dtype=np.float)[0]
-	ONE_HOT_END = np.eye(1, n, 27, dtype=np.float)[0]
+	ONE_HOT_START = np.eye(1, n, 26, dtype=float)[0]
+	ONE_HOT_END = np.eye(1, n, 27, dtype=float)[0]
 
 	def __init__(self, fname : Optional[str]):
 		self.computed = False
@@ -24,16 +24,16 @@ class NGram(object):
 		self._trigram = None # type: Optional[np.ndarray]
 		if fname:
 			data = np.load(fname)
-			self._unigram_counts = data['unigram_counts'].astype(np.float)
+			self._unigram_counts = data['unigram_counts'].astype(float)
 			assert self._unigram_counts.shape == (self.n,)
-			self._bigram_counts = data['bigram_counts'].astype(np.float)
+			self._bigram_counts = data['bigram_counts'].astype(float)
 			assert self._bigram_counts.shape == (self.n, self.n)
-			self._trigram_counts = data['trigram_counts'].astype(np.float)
+			self._trigram_counts = data['trigram_counts'].astype(float)
 			assert self._trigram_counts.shape == (self.n, self.n, self.n)
 		else:
-			self._unigram_counts = np.ones((self.n,), dtype=np.float)
-			self._bigram_counts = np.ones((self.n,)*2, dtype=np.float)
-			self._trigram_counts = np.ones((self.n,)*3, dtype=np.float)
+			self._unigram_counts = np.ones((self.n,), dtype=float)
+			self._bigram_counts = np.ones((self.n,)*2, dtype=float)
+			self._trigram_counts = np.ones((self.n,)*3, dtype=float)
 		self._uniform = np.ones_like(self._unigram_counts)
 		self._uniform /= self._uniform.sum()
 

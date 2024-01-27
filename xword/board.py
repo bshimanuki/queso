@@ -182,9 +182,9 @@ class Square(object):
 			border_style = '2px solid black'
 			styles = []
 			if display:
-				white = np.array([1, 1, 1], dtype=np.float)
-				red = np.array([230, 124, 115], dtype=np.float) / 255
-				green = np.array([87, 187, 138], dtype=np.float) / 255
+				white = np.array([1, 1, 1], dtype=float)
+				red = np.array([230, 124, 115], dtype=float) / 255
+				green = np.array([87, 187, 138], dtype=float) / 255
 				if self.is_cell and color_probability and use_entries:
 					if prob > 1:
 						color = Color(green)
@@ -346,7 +346,7 @@ class Entry(object):
 		if clue is not None:
 			self.clue = clue
 		self.answers = [to_uint(answer) if answer is not None else None for answer in answers]
-		self.scores = np.asarray(scores, dtype=np.float)
+		self.scores = np.asarray(scores, dtype=float)
 		self.p = self.scores / self.scores.sum()
 
 	async def use_clue(self, clue : str, session : aiohttp.ClientSession, proxy : Proxy, weight_for_unknown : float, weight_func : Optional[Callable[[float], float]] = None, async_tqdm : tqdm.tqdm = None, excs : Optional[GroupException] = None) -> None:
@@ -549,9 +549,9 @@ class Board(object):
 							]
 							for row in self.grid
 						],
-						dtype=np.float)
+						dtype=float)
 					sort_order_list = np.unravel_index(np.argsort(p_cells, axis=None), p_cells.shape)
-					sort_order = np.zeros_like(p_cells, dtype=np.int)
+					sort_order = np.zeros_like(p_cells, dtype=int)
 					sort_order[sort_order_list] = np.arange(sort_order.size)
 					square_board_kwargs['cell_order'] = sort_order
 					square_board_kwargs['num_cells'] = self.cells.sum()
