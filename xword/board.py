@@ -286,9 +286,9 @@ class Entry(object):
 	def __init__(self, board: 'Board', start: Tuple[int, int], direction: Direction):
 		# board
 		self.board = board
+		self.start = start
 		start_y, start_x = start
 
-		self.number = self.board.grid[start].number
 		self.direction = direction
 		self.length = 0
 		self.clue = None # type: Optional[str]
@@ -315,6 +315,10 @@ class Entry(object):
 		self.cells = self.board.grid[self.slice]
 
 		self.set_answers([None], [1])
+
+	@property
+	def number(self) -> Optional[int]:
+		return self.board.grid[self.start].number
 
 	@property
 	def p_cells(self) -> np.ndarray: # (cell, letter_dist)
@@ -486,7 +490,6 @@ class Board(object):
 								numberless += 1
 						else:
 							crossless += 1
-		self.entries[Direction.DOWN] = sorted(self.entries[Direction.DOWN])
 		if force_number:
 			for y in range(self.shape[0]):
 				for x in range(self.shape[1]):
@@ -498,6 +501,7 @@ class Board(object):
 			logging.warning('{} cells are missing crosses'.format(crossless))
 		if numberless:
 			logging.warning('{} cells are missing numbers'.format(numberless))
+		self.entries[Direction.DOWN] = sorted(self.entries[Direction.DOWN])
 
 	@property
 	def num_entries(self):
@@ -747,7 +751,6 @@ class Board(object):
 								clue = line
 								number = None
 							else:
-								assert match is not None
 								number_str, clue = match.groups()
 								number = int(number_str)
 							if match_single_line or number == next_entry.number:

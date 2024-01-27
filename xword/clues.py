@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 import enum
 import functools
 import gzip
+import hashlib
 import html
 import io
 import itertools
@@ -33,6 +34,8 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 CACHE_DIR = os.path.join(ROOT, 'cache')
 TIMEOUT_SECONDS = 10
 PROXY_TIMEOUT_SECONDS = 20
+SLUG_MAX_LEN = 140 # encryptfs has a 143 character filename limit
+HASH_LEN = 16
 
 class Proxy(object):
 	def __init__(self, raise_on_error=False):
@@ -178,7 +181,10 @@ class TrackerBase(abc.ABC):
 	def slugify(s):
 		s = normalize_unicode(s).lower()
 		s = re.sub(r'\W+', '-', s)
+		if len(s) > SLUG_MAX_LEN:
+			s = f'{hashlib.sha256(s).hexdigest()[:HASH_LEN]}-{s[:SLUG_MAX_LEN-HASH_LEN-1]}'
 		return s
+
 
 	def is_valid(self, doc : str) -> bool:
 		if len(doc) < self.min_valid_html_length:
